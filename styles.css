@@ -1,0 +1,86 @@
+.writing-system-reorder-row {
+  display: grid;
+  grid-template-columns: 2.5rem 2.5rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.35rem 0;
+}
+.writing-system-reorder-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.writing-system-modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  background: var(--background-primary);
+  padding-top: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.writing-system-validation-ok { color: var(--text-success); }
+.writing-system-validation-warn { color: var(--text-warning); }
+
+
+/* v2.0.2 - keep New Scene/New Project action buttons visible */
+.modal.mod-dim .modal-content,
+.modal-container .modal-content {
+  max-height: 78vh;
+  overflow-y: auto;
+}
+
+.writing-system-modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 0.75rem 0 0.25rem;
+  margin-top: 0.75rem;
+}
+
+.writing-system-modal-actions .setting-item {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.writing-system-modal-actions .setting-item-control {
+  width: 100%;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+
+/* v2.0.3 compact New Scene modal */
+.writing-system-scene-modal {
+  max-height: 90vh;
+}
+
+.writing-system-scene-modal .modal-content {
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.writing-system-scene-modal .setting-item {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+.writing-system-modal-actions {
+  position: static;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.writing-system-modal-actions .setting-item {
+  padding: 0;
+  border-top: 0;
+}
+
+.writing-system-modal-actions .setting-item-control {
+  width: 100%;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

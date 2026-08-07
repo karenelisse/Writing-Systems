@@ -1,0 +1,15 @@
+commands/compile.js: OK
+commands/dashboard.js: OK
+commands/index.js: OK
+commands/navigation.js: OK
+commands/project.js: OK
+commands/scene.js: OK
+lib/dashboard.js: OK
+lib/templates.js: OK
+main.js: OK
+modals/project.js: OK
+modals/reorder.js: OK
+modals/scene.js: OK
+modals/validate.js: OK
+services/files.js: OK
+All relative require paths resolved.
