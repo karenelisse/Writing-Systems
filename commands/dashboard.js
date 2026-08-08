@@ -13,18 +13,36 @@ function dashboards(plugin) {
 async function chooseDashboard(plugin) {
   const active = plugin.app.workspace.getActiveFile();
   if (active && /\/Plot\/Book \d+\/Dashboard\.md$/i.test(active.path)) return active;
+  if (active) {
+    const bookMatch = active.path.match(/^(.*\/Plot\/Book \d+)(?:\/.*)?$/i);
+    if (bookMatch) {
+      const nearby = plugin.app.vault.getAbstractFileByPath(`${bookMatch[1]}/Dashboard.md`);
+      if (nearby instanceof TFile) return nearby;
+    }
+  }
   const ds = dashboards(plugin);
   if (!ds.length) { new Notice('No writing Dashboard.md found.'); return null; }
   if (ds.length === 1) return ds[0];
   return await new Promise(resolve => {
     const app = plugin.app;
     class Pick extends Modal {
+      constructor() {
+        super(app);
+        this.resolved = false;
+      }
       onOpen() {
         this.contentEl.createEl('h2', { text:'Choose dashboard' });
         ds.forEach(f => new Setting(this.contentEl).setName(f.path)
-          .addButton(b=>b.setButtonText('Open').onClick(()=>{ this.close(); resolve(f); })));
+          .addButton(b=>b.setButtonText('Use').onClick(()=>{
+            this.resolved = true;
+            this.close();
+            resolve(f);
+          })));
       }
-      onClose(){ this.contentEl.empty(); }
+      onClose(){
+        this.contentEl.empty();
+        if (!this.resolved) resolve(null);
+      }
     }
     new Pick(app).open();
   });

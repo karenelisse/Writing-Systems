@@ -8,13 +8,17 @@ Replace the contents of:
 
 `.obsidian/plugins/writing-system/`
 
-with:
-
-- `manifest.json`
-- `main.js`
-- `styles.css`
+with the complete repository contents. Version 2 uses the `commands`, `lib`,
+`modals`, and `services` folders in addition to `manifest.json`, `main.js`, and
+`styles.css`.
 
 Restart Obsidian and enable **Writing System**.
+
+## Development
+
+`main.js` is the bundled file that Obsidian loads. Make code changes in
+`main.source.js` and the source folders, then run `node build-bundle.js` and
+copy `dist/main.js` to the repository root before committing.
 
 ## Source of truth
 

@@ -5,6 +5,15 @@ const { stripManuscript } = require('../lib/templates');
 const { ensureFolder } = require('../services/files');
 
 async function compile(plugin, copyToClipboard) {
+  try {
+    await compileBook(plugin, copyToClipboard);
+  } catch (error) {
+    console.error('Writing System compile failed', error);
+    new Notice(`Compile failed: ${error?.message || String(error)}`);
+  }
+}
+
+async function compileBook(plugin, copyToClipboard) {
   const d = await chooseDashboard(plugin);
   if (!d) return;
 
@@ -74,17 +83,18 @@ async function compile(plugin, copyToClipboard) {
     ? `${titleBlock}\n\n${bodyParts.join('\n\n')}\n`
     : `${titleBlock}\n`;
 
-  const outDir = `${I.bookDir}/Compiled`;
+  const outDir = normalizePath(`${I.bookDir}/Compiled`);
   await ensureFolder(plugin, `${outDir}/Chapters`);
 
   const outputName = safeFilename(workingTitle) || I.bookName;
-  const outPath = `${outDir}/${outputName}.md`;
+  const outPath = normalizePath(`${outDir}/${outputName}.md`);
   let f = plugin.app.vault.getAbstractFileByPath(outPath);
   if (f instanceof TFile) await plugin.app.vault.modify(f, full);
   else await plugin.app.vault.create(outPath, full);
 
   for (const [ch, proseParts] of chapterMap) {
-    const cp = `${outDir}/Chapters/Chapter ${ch}.md`;
+    const chapterName = safeFilename(ch) || 'Unassigned';
+    const cp = normalizePath(`${outDir}/Chapters/Chapter ${chapterName}.md`);
     const txt = `# Chapter ${ch}\n\n${proseParts.join('\n\n')}\n`;
     f = plugin.app.vault.getAbstractFileByPath(cp);
     if (f instanceof TFile) await plugin.app.vault.modify(f, txt);
@@ -98,12 +108,12 @@ async function compile(plugin, copyToClipboard) {
   if (copyToClipboard) {
     try {
       await navigator.clipboard.writeText(full);
-      new Notice(`Compiled ${compiled} scenes and copied to clipboard. ${empty} empty; ${missing} missing.${detail}`);
+      new Notice(`Compiled ${compiled} scenes to ${outPath} and copied to clipboard. ${empty} empty; ${missing} missing.${detail}`);
     } catch {
-      new Notice(`Compiled ${compiled} scenes, but clipboard copy failed. ${empty} empty; ${missing} missing.${detail}`);
+      new Notice(`Compiled ${compiled} scenes to ${outPath}, but clipboard copy failed. ${empty} empty; ${missing} missing.${detail}`);
     }
   } else {
-    new Notice(`Compiled ${compiled} scenes. ${empty} empty; ${missing} missing.${detail}`);
+    new Notice(`Compiled ${compiled} scenes to ${outPath}. ${empty} empty; ${missing} missing.${detail}`);
   }
 
   f = plugin.app.vault.getAbstractFileByPath(outPath);
