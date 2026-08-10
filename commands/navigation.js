@@ -1,6 +1,6 @@
 const { Notice, TFile, normalizePath } = require('obsidian');
 const { chooseDashboard } = require('./dashboard');
-const { bookInfo, parseRows, parseWiki, basename } = require('../lib/dashboard');
+const { bookInfo, parseRows, parseWiki, basename, linkedFilePath } = require('../lib/dashboard');
 const { ValidateModal } = require('../modals/validate');
 
 async function openPaired(plugin, type) {
@@ -69,8 +69,8 @@ async function validateBook(plugin) {
     }
     seen.add(key);
 
-    for (const folder of ['Scenes', 'Manuscript']) {
-      const path = normalizePath(`${info.bookDir}/${folder}/${title}.md`);
+    for (const [folder, link] of [['Scenes', row.sceneLink], ['Manuscript', row.manuscriptLink]]) {
+      const path = normalizePath(linkedFilePath(info.bookDir, link, folder, title));
       if (!(plugin.app.vault.getAbstractFileByPath(path) instanceof TFile)) {
         problems++;
         lines.push({ ok: false, text: `Missing ${folder === 'Scenes' ? 'scene' : 'manuscript'}: ${title}` });

@@ -1,4 +1,4 @@
-/* Writing System v2.0.9 - generated bundle. Edit source modules, then rebuild. */
+/* Writing System v2.1.0 - generated bundle. Edit source modules, then rebuild. */
 'use strict';
 
 const __externalRequire = require;
@@ -19,7 +19,7 @@ module.exports = class WritingSystem extends Plugin {
 "commands/compile.js": function (require, module, exports) {
 const { Notice, TFile, normalizePath } = require('obsidian');
 const { chooseDashboard } = require('./dashboard');
-const { bookInfo, parseRows, parseWiki, basename, workingTitleFromDashboard, safeFilename } = require('../lib/dashboard');
+const { bookInfo, parseRows, parseWiki, basename, linkedFilePath, workingTitleFromDashboard, safeFilename } = require('../lib/dashboard');
 const { stripManuscript } = require('../lib/templates');
 const { ensureFolder } = require('../services/files');
 
@@ -62,7 +62,7 @@ async function compileBook(plugin, copyToClipboard) {
     const title = sw.label || basename(sw.path);
     if (!title) continue;
 
-    const manuscriptPath = normalizePath(`${I.bookDir}/Manuscript/${title}.md`);
+    const manuscriptPath = normalizePath(linkedFilePath(I.bookDir, r.manuscriptLink, 'Manuscript', title));
     const mf = plugin.app.vault.getAbstractFileByPath(manuscriptPath);
 
     if (!(mf instanceof TFile)) {
@@ -160,7 +160,7 @@ async function compileWorkingDraft(plugin) {
       const title = sceneWiki.label || basename(sceneWiki.path);
       if (!title) continue;
 
-      const manuscriptPath = normalizePath(`${info.bookDir}/Manuscript/${title}.md`);
+      const manuscriptPath = normalizePath(linkedFilePath(info.bookDir, row.manuscriptLink, 'Manuscript', title));
       const manuscript = plugin.app.vault.getAbstractFileByPath(manuscriptPath);
       if (!(manuscript instanceof TFile)) {
         missing++;
@@ -180,7 +180,8 @@ async function compileWorkingDraft(plugin) {
         currentChapter = chapter;
       }
 
-      bodyParts.push(`### [[Manuscript/${title}|${title}]]\n\n${prose}`);
+      const manuscriptLink = manuscriptPath.slice(info.bookDir.length + 1).replace(/\.md$/i, '');
+      bodyParts.push(`### [[${manuscriptLink}|${title}]]\n\n${prose}`);
       compiled++;
     }
 
@@ -218,8 +219,8 @@ module.exports = { compile, compileWorkingDraft };
 
 },
 "commands/dashboard.js": function (require, module, exports) {
-const { Modal, Setting, Notice, TFile } = require('obsidian');
-const { parseRows, replaceRows, bookInfo, parseWiki, basename, extractLinks, firstLinkName } = require('../lib/dashboard');
+const { Modal, Setting, Notice, TFile, normalizePath } = require('obsidian');
+const { parseRows, replaceRows, bookInfo, parseWiki, basename, stripOrderPrefix, numberedName, linkedFilePath, extractLinks, firstLinkName } = require('../lib/dashboard');
 const { sceneTemplate, manuscriptTemplate } = require('../lib/templates');
 const { createMissing } = require('../services/files');
 const { ReorderModal } = require('../modals/reorder');
@@ -301,23 +302,41 @@ async function applyDashboardFile(plugin, d, showNotice) {
   catch(e) { if (showNotice) new Notice(e.message); return; }
 
   let created = 0;
-  for (let i=0; i<rs.length; i++) {
-    const r = rs[i];
-    const order = (i + 1) * 100;
+  const plans = rs.map((r, i) => {
     const sw = parseWiki(r.sceneLink);
     const mw = parseWiki(r.manuscriptLink);
-    const title = sw.label || basename(sw.path) || mw.label || basename(mw.path);
+    const title = stripOrderPrefix(sw.label || basename(sw.path) || mw.label || basename(mw.path));
+    if (!title) throw new Error(`Dashboard row ${i + 1} has no scene title.`);
+    const numbered = numberedName(title, i + 1, rs.length);
+    return {
+      title,
+      sceneSource: normalizePath(linkedFilePath(I.bookDir, r.sceneLink, 'Scenes', title)),
+      manuscriptSource: normalizePath(linkedFilePath(I.bookDir, r.manuscriptLink, 'Manuscript', title)),
+      scenePath: normalizePath(`${I.bookDir}/Scenes/${numbered}.md`),
+      manuscriptPath: normalizePath(`${I.bookDir}/Manuscript/${numbered}.md`)
+    };
+  });
+
+  await renumberPairs(plugin, plans);
+
+  for (let i=0; i<rs.length; i++) {
+    const r = rs[i];
+    const plan = plans[i];
+    const order = (i + 1) * 100;
+    const title = plan.title;
     if (!title) continue;
 
     const pov = firstLinkName(r.pov);
     const locations = extractLinks(r.locations);
     const chText = String(r.chapter || '').trim();
     const chapter = /^\d+$/.test(chText) ? Number(chText) : chText;
-    const sp = `${I.bookDir}/Scenes/${title}.md`;
-    const mp = `${I.bookDir}/Manuscript/${title}.md`;
+    const sp = plan.scenePath;
+    const mp = plan.manuscriptPath;
+    const sceneTarget = sp.slice(I.bookDir.length + 1).replace(/\.md$/i, '');
+    const manuscriptTarget = mp.slice(I.bookDir.length + 1).replace(/\.md$/i, '');
 
-    if (await createMissing(plugin, sp, sceneTemplate({...I,title,pov,locations,order,sceneStatus:r.sceneStatus}))) created++;
-    if (await createMissing(plugin, mp, manuscriptTemplate({...I,title,pov,locations,order,manuscriptStatus:r.manuscriptStatus}))) created++;
+    if (await createMissing(plugin, sp, sceneTemplate({...I,title,pov,locations,order,sceneStatus:r.sceneStatus,manuscriptTarget}))) created++;
+    if (await createMissing(plugin, mp, manuscriptTemplate({...I,title,pov,locations,order,manuscriptStatus:r.manuscriptStatus,sceneTarget}))) created++;
 
     const sf = plugin.app.vault.getAbstractFileByPath(sp);
     const mf = plugin.app.vault.getAbstractFileByPath(mp);
@@ -333,7 +352,7 @@ async function applyDashboardFile(plugin, d, showNotice) {
         fm.status = r.sceneStatus || 'Planned';
         fm.pov = pov ? [`[[${pov}]]`] : [];
         fm.locations = locations;
-        fm.manuscript = `[[Manuscript/${title}]]`;
+        fm.manuscript = `[[${manuscriptTarget}]]`;
       });
     }
 
@@ -348,12 +367,12 @@ async function applyDashboardFile(plugin, d, showNotice) {
         fm.status = r.manuscriptStatus || 'Not Started';
         fm.pov = pov ? [`[[${pov}]]`] : [];
         fm.locations = locations;
-        fm.scene = `[[Scenes/${title}]]`;
+        fm.scene = `[[${sceneTarget}]]`;
       });
     }
 
-    r.sceneLink = `[[Scenes/${title}|${title}]]`;
-    r.manuscriptLink = `[[Manuscript/${title}|${title}]]`;
+    r.sceneLink = `[[${sp.slice(I.bookDir.length + 1).replace(/\.md$/i, '')}|${title}]]`;
+    r.manuscriptLink = `[[${mp.slice(I.bookDir.length + 1).replace(/\.md$/i, '')}|${title}]]`;
     r.pov = pov ? `[[${pov}]]` : '';
     r.locations = locations.join(', ');
   }
@@ -361,6 +380,42 @@ async function applyDashboardFile(plugin, d, showNotice) {
   await plugin.app.vault.modify(d, replaceRows(original, rs));
   await regenerateIndexes(plugin, d, rs);
   if (showNotice) new Notice(`Applied Dashboard to ${rs.length} scenes; created ${created} missing paired files.`);
+}
+
+async function renumberPairs(plugin, plans) {
+  const moves = [];
+  const sources = new Set();
+  const destinations = new Set();
+
+  for (const plan of plans) {
+    for (const [source, destination] of [
+      [plan.sceneSource, plan.scenePath],
+      [plan.manuscriptSource, plan.manuscriptPath]
+    ]) {
+      if (sources.has(source)) throw new Error(`Duplicate Dashboard file link: ${source}`);
+      if (destinations.has(destination)) throw new Error(`Duplicate numbered filename: ${destination}`);
+      sources.add(source);
+      destinations.add(destination);
+      const file = plugin.app.vault.getAbstractFileByPath(source);
+      if (file instanceof TFile && source !== destination) moves.push({ file, source, destination });
+    }
+  }
+
+  for (const { destination } of moves) {
+    const occupant = plugin.app.vault.getAbstractFileByPath(destination);
+    if (occupant instanceof TFile && !sources.has(destination)) {
+      throw new Error(`Cannot number scenes because this file already exists: ${destination}`);
+    }
+  }
+
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  for (let i = 0; i < moves.length; i++) {
+    const move = moves[i];
+    const folder = move.source.split('/').slice(0, -1).join('/');
+    move.temp = normalizePath(`${folder}/.writing-system-renumber-${stamp}-${i}.md`);
+    await plugin.app.fileManager.renameFile(move.file, move.temp);
+  }
+  for (const move of moves) await plugin.app.fileManager.renameFile(move.file, move.destination);
 }
 
 async function regenerateIndexes(plugin, dashboard, rs) {
@@ -371,8 +426,8 @@ async function regenerateIndexes(plugin, dashboard, rs) {
     const sw = parseWiki(r.sceneLink);
     const title = sw.label || basename(sw.path);
     if (!title) continue;
-    sceneLines.push(`- [[Scenes/${title}|${title}]] — ${r.sceneStatus || 'Planned'}`);
-    manLines.push(`- [[Manuscript/${title}|${title}]] — ${r.manuscriptStatus || 'Not Started'}`);
+    sceneLines.push(`- ${r.sceneLink} — ${r.sceneStatus || 'Planned'}`);
+    manLines.push(`- ${r.manuscriptLink} — ${r.manuscriptStatus || 'Not Started'}`);
   }
   const sceneText = `---\ntags:\n  - scene-index\nbook: ${I.bookName}\nbook_number: ${I.bookNumber}\ngenerated_from: Dashboard\n---\n\n# ${I.bookName} — Scene Index\n\n> Generated from [[Dashboard]]. Do not edit this file to control story order.\n\n${sceneLines.join('\n')}\n`;
   const manText = `---\ntags:\n  - manuscript-index\nbook: ${I.bookName}\nbook_number: ${I.bookNumber}\ngenerated_from: Dashboard\n---\n\n# ${I.bookName} — Manuscript Index\n\n> Generated from [[Dashboard]]. Do not edit this file to control story order.\n\n${manLines.join('\n')}\n`;
@@ -413,7 +468,7 @@ module.exports = { registerCommands };
 "commands/navigation.js": function (require, module, exports) {
 const { Notice, TFile, normalizePath } = require('obsidian');
 const { chooseDashboard } = require('./dashboard');
-const { bookInfo, parseRows, parseWiki, basename } = require('../lib/dashboard');
+const { bookInfo, parseRows, parseWiki, basename, linkedFilePath } = require('../lib/dashboard');
 const { ValidateModal } = require('../modals/validate');
 
 async function openPaired(plugin, type) {
@@ -482,8 +537,8 @@ async function validateBook(plugin) {
     }
     seen.add(key);
 
-    for (const folder of ['Scenes', 'Manuscript']) {
-      const path = normalizePath(`${info.bookDir}/${folder}/${title}.md`);
+    for (const [folder, link] of [['Scenes', row.sceneLink], ['Manuscript', row.manuscriptLink]]) {
+      const path = normalizePath(linkedFilePath(info.bookDir, link, folder, title));
       if (!(plugin.app.vault.getAbstractFileByPath(path) instanceof TFile)) {
         problems++;
         lines.push({ ok: false, text: `Missing ${folder === 'Scenes' ? 'scene' : 'manuscript'}: ${title}` });
@@ -730,6 +785,24 @@ function safeFilename(name) {
   return String(name || '').replace(/[\\/:*?"<>|]/g, ' - ').trim();
 }
 
+function stripOrderPrefix(name) {
+  return String(name || '').replace(/^\d{3,}\s+-\s+/, '').trim();
+}
+
+function numberedName(title, position, total) {
+  const width = Math.max(3, String(Math.max(1, total)).length);
+  return `${String(position).padStart(width, '0')} - ${stripOrderPrefix(title)}`;
+}
+
+function linkedFilePath(bookDir, link, folder, title) {
+  const wiki = parseWiki(link);
+  let linked = String(wiki.path || '').replace(/\.md$/i, '').trim();
+  if (!linked) linked = `${folder}/${title}`;
+  if (linked.startsWith(`${bookDir}/`)) return `${linked}.md`;
+  if (!linked.includes('/')) linked = `${folder}/${linked}`;
+  return `${bookDir}/${linked}.md`;
+}
+
 function extractLinks(cell) {
   const found = [];
   const re = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
@@ -752,7 +825,7 @@ function firstLinkName(cell) {
 module.exports = {
   START, END, dirname, basename, cleanTitle, parseWiki, parseRows, renderRows,
   replaceRows, bookInfo, workingTitleFromDashboard, safeFilename,
-  extractLinks, firstLinkName
+  stripOrderPrefix, numberedName, linkedFilePath, extractLinks, firstLinkName
 };
 
 },
@@ -760,6 +833,7 @@ module.exports = {
 function sceneTemplate(x) {
   const pov = x.pov ? `\n  - "[[${x.pov}]]"` : '';
   const locations = (x.locations || []).length ? '\n' + x.locations.map(v => `  - "${v}"`).join('\n') : '';
+  const manuscriptTarget = x.manuscriptTarget || `Manuscript/${x.title}`;
   return `---
 tags:
   - scene
@@ -770,7 +844,7 @@ chapter:
 status: ${x.sceneStatus || 'Planned'}
 pov:${pov}
 locations:${locations}
-manuscript: "[[Manuscript/${x.title}]]"
+manuscript: "[[${manuscriptTarget}]]"
 characters:
 races:
 ---
@@ -847,13 +921,14 @@ These are notes only, not polished prose.
 
 ## Manuscript
 
-[[Manuscript/${x.title}|Open manuscript]]
+[[${manuscriptTarget}|Open manuscript]]
 `;
 }
 
 function manuscriptTemplate(x) {
   const pov = x.pov ? `\n  - "[[${x.pov}]]"` : '';
   const locations = (x.locations || []).length ? '\n' + x.locations.map(v => `  - "${v}"`).join('\n') : '';
+  const sceneTarget = x.sceneTarget || `Scenes/${x.title}`;
   return `---
 tags:
   - manuscript
@@ -864,7 +939,7 @@ chapter:
 status: ${x.manuscriptStatus || 'Not Started'}
 pov:${pov}
 locations:${locations}
-scene: "[[Scenes/${x.title}]]"
+scene: "[[${sceneTarget}]]"
 ---
 
 # ${x.title}

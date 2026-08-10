@@ -1,6 +1,6 @@
 const { Notice, TFile, normalizePath } = require('obsidian');
 const { chooseDashboard } = require('./dashboard');
-const { bookInfo, parseRows, parseWiki, basename, workingTitleFromDashboard, safeFilename } = require('../lib/dashboard');
+const { bookInfo, parseRows, parseWiki, basename, linkedFilePath, workingTitleFromDashboard, safeFilename } = require('../lib/dashboard');
 const { stripManuscript } = require('../lib/templates');
 const { ensureFolder } = require('../services/files');
 
@@ -43,7 +43,7 @@ async function compileBook(plugin, copyToClipboard) {
     const title = sw.label || basename(sw.path);
     if (!title) continue;
 
-    const manuscriptPath = normalizePath(`${I.bookDir}/Manuscript/${title}.md`);
+    const manuscriptPath = normalizePath(linkedFilePath(I.bookDir, r.manuscriptLink, 'Manuscript', title));
     const mf = plugin.app.vault.getAbstractFileByPath(manuscriptPath);
 
     if (!(mf instanceof TFile)) {
@@ -141,7 +141,7 @@ async function compileWorkingDraft(plugin) {
       const title = sceneWiki.label || basename(sceneWiki.path);
       if (!title) continue;
 
-      const manuscriptPath = normalizePath(`${info.bookDir}/Manuscript/${title}.md`);
+      const manuscriptPath = normalizePath(linkedFilePath(info.bookDir, row.manuscriptLink, 'Manuscript', title));
       const manuscript = plugin.app.vault.getAbstractFileByPath(manuscriptPath);
       if (!(manuscript instanceof TFile)) {
         missing++;
@@ -161,7 +161,8 @@ async function compileWorkingDraft(plugin) {
         currentChapter = chapter;
       }
 
-      bodyParts.push(`### [[Manuscript/${title}|${title}]]\n\n${prose}`);
+      const manuscriptLink = manuscriptPath.slice(info.bookDir.length + 1).replace(/\.md$/i, '');
+      bodyParts.push(`### [[${manuscriptLink}|${title}]]\n\n${prose}`);
       compiled++;
     }
 

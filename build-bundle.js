@@ -17,7 +17,7 @@ const factories = entries.map(id => {
   return `${JSON.stringify(id)}: function (require, module, exports) {\n${source}\n}`;
 });
 
-const bundle = `/* Writing System v2.0.9 - generated bundle. Edit source modules, then rebuild. */
+const bundle = `/* Writing System v2.1.0 - generated bundle. Edit source modules, then rebuild. */
 'use strict';
 
 const __externalRequire = require;

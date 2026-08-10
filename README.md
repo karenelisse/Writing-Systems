@@ -51,6 +51,10 @@ Manuscript owns prose.
 
 Dashboard help is embedded inside every newly-created Dashboard.
 
+Applying or reordering the Dashboard numbers both paired files with padded
+prefixes such as `001 - Opening.md`, keeping Scene and Manuscript folders in
+Dashboard order while preserving the visible scene titles in links.
+
 ## v2.0.1 table fix
 
 Aliased Wiki Links inside Markdown tables are rendered with an escaped pipe (`\|`), e.g. `[[Scenes/Meeting Darcy\|Meeting Darcy]]`. This is required Markdown-table syntax; Obsidian still displays the link normally. The plugin escapes and unescapes these automatically.
