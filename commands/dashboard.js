@@ -89,8 +89,8 @@ async function applyDashboardFile(plugin, d, showNotice) {
     const numbered = numberedName(title, i + 1, rs.length);
     return {
       title,
-      sceneSource: normalizePath(linkedFilePath(I.bookDir, r.sceneLink, 'Scenes', title)),
-      manuscriptSource: normalizePath(linkedFilePath(I.bookDir, r.manuscriptLink, 'Manuscript', title)),
+      sceneSource: resolvePairPath(plugin, I.bookDir, r.sceneLink, 'Scenes', title),
+      manuscriptSource: resolvePairPath(plugin, I.bookDir, r.manuscriptLink, 'Manuscript', title),
       scenePath: normalizePath(`${I.bookDir}/Scenes/${numbered}.md`),
       manuscriptPath: normalizePath(`${I.bookDir}/Manuscript/${numbered}.md`)
     };
@@ -161,6 +161,29 @@ async function applyDashboardFile(plugin, d, showNotice) {
   if (showNotice) new Notice(`Applied Dashboard to ${rs.length} scenes; created ${created} missing paired files.`);
 }
 
+function resolvePairPath(plugin, bookDir, link, folder, title) {
+  const linkedPath = normalizePath(linkedFilePath(bookDir, link, folder, title));
+  const folderPath = normalizePath(`${bookDir}/${folder}`);
+  const matching = plugin.app.vault.getMarkdownFiles().filter(file => {
+    const parent = file.path.split('/').slice(0, -1).join('/');
+    return parent === folderPath && stripOrderPrefix(basename(file.path)) === title;
+  });
+  const numbered = matching.filter(file => /^\d{3,}\s+-\s+/.test(basename(file.path)));
+
+  if (numbered.length > 1) {
+    throw new Error(`Multiple numbered ${folder} files match "${title}".`);
+  }
+  if (numbered.length === 1) return numbered[0].path;
+
+  const linked = plugin.app.vault.getAbstractFileByPath(linkedPath);
+  if (linked instanceof TFile) return linked.path;
+  if (matching.length === 1) return matching[0].path;
+  if (matching.length > 1) {
+    throw new Error(`Multiple ${folder} files match "${title}".`);
+  }
+  return linkedPath;
+}
+
 async function renumberPairs(plugin, plans) {
   const moves = [];
   const sources = new Set();
@@ -192,9 +215,9 @@ async function renumberPairs(plugin, plans) {
     const move = moves[i];
     const folder = move.source.split('/').slice(0, -1).join('/');
     move.temp = normalizePath(`${folder}/.writing-system-renumber-${stamp}-${i}.md`);
-    await plugin.app.fileManager.renameFile(move.file, move.temp);
+    await plugin.app.vault.rename(move.file, move.temp);
   }
-  for (const move of moves) await plugin.app.fileManager.renameFile(move.file, move.destination);
+  for (const move of moves) await plugin.app.vault.rename(move.file, move.destination);
 }
 
 async function regenerateIndexes(plugin, dashboard, rs) {

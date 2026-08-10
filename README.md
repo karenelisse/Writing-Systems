@@ -55,6 +55,10 @@ Applying or reordering the Dashboard numbers both paired files with padded
 prefixes such as `001 - Opening.md`, keeping Scene and Manuscript folders in
 Dashboard order while preserving the visible scene titles in links.
 
+Version 2.1.1 also recovers safely when older Dashboard links still point to
+unnumbered names: the existing numbered pair is reordered instead of creating
+replacement files.
+
 ## v2.0.1 table fix
 
 Aliased Wiki Links inside Markdown tables are rendered with an escaped pipe (`\|`), e.g. `[[Scenes/Meeting Darcy\|Meeting Darcy]]`. This is required Markdown-table syntax; Obsidian still displays the link normally. The plugin escapes and unescapes these automatically.
