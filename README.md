@@ -45,6 +45,7 @@ Manuscript owns prose.
 - Writing System: Compile Manuscript
 - Writing System: Compile Manuscript and Copy to Clipboard
 - Writing System: Compile Working Draft
+- Writing System: Working Draft to Manuscript
 - Writing System: Open Scene
 - Writing System: Open Manuscript
 - Writing System: Validate Book

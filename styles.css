@@ -88,3 +88,29 @@
 
 .writing-system-validation-ok { color: var(--color-green); }
 .writing-system-validation-warn { color: var(--color-orange); }
+
+.writing-system-selection-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.writing-system-change-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border-hover);
+  border-radius: var(--radius-s);
+}
+
+.writing-system-change-row {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.writing-system-change-row:last-child { border-bottom: 0; }
+.writing-system-change-row label { color: var(--text-normal); font-weight: var(--font-semibold); }
+.writing-system-change-path { grid-column: 2; color: var(--text-muted); font-size: var(--font-ui-smaller); }

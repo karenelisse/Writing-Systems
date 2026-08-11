@@ -1,4 +1,4 @@
-/* Writing System v2.1.1 - generated bundle. Edit source modules, then rebuild. */
+/* Writing System v2.2.0 - generated bundle. Edit source modules, then rebuild. */
 'use strict';
 
 const __externalRequire = require;
@@ -469,6 +469,7 @@ const { newProject } = require('./project');
 const { openDashboard, reorderScenes, applyDashboard } = require('./dashboard');
 const { newScene } = require('./scene');
 const { compile, compileWorkingDraft } = require('./compile');
+const { workingDraftToManuscript } = require('./working-draft');
 const { openPaired, validateBook } = require('./navigation');
 
 function registerCommands(plugin) {
@@ -480,6 +481,7 @@ function registerCommands(plugin) {
   plugin.addCommand({ id:'compile-manuscript', name:'Compile Manuscript', callback:()=>compile(plugin, false) });
   plugin.addCommand({ id:'compile-copy', name:'Compile Manuscript and Copy to Clipboard', callback:()=>compile(plugin, true) });
   plugin.addCommand({ id:'compile-working-draft', name:'Compile Working Draft', callback:()=>compileWorkingDraft(plugin) });
+  plugin.addCommand({ id:'working-draft-to-manuscript', name:'Working Draft to Manuscript', callback:()=>workingDraftToManuscript(plugin) });
   plugin.addCommand({ id:'open-scene', name:'Open Scene', callback:()=>openPaired(plugin, 'scene') });
   plugin.addCommand({ id:'open-manuscript', name:'Open Manuscript', callback:()=>openPaired(plugin, 'manuscript') });
   plugin.addCommand({ id:'validate-book', name:'Validate Book', callback:()=>validateBook(plugin) });
@@ -654,6 +656,75 @@ async function newScene(plugin) {
 }
 
 module.exports = { newScene };
+
+},
+"commands/working-draft.js": function (require, module, exports) {
+const { Notice, TFile, normalizePath } = require('obsidian');
+const { linkedFilePath } = require('../lib/dashboard');
+const { stripManuscript, replaceManuscriptProse, parseWorkingDraft } = require('../lib/templates');
+const { WorkingDraftSyncModal } = require('../modals/working-draft');
+
+const normalized = value => String(value || '').replace(/\r\n/g, '\n').trim();
+
+async function workingDraftToManuscript(plugin) {
+  const draft = plugin.app.workspace.getActiveFile();
+  if (!(draft instanceof TFile) || !/\/Compiled\/[^/]+ - Working Draft\.md$/i.test(draft.path)) {
+    new Notice('Open a compiled “- Working Draft.md” file first.');
+    return;
+  }
+
+  const bookDir = draft.path.replace(/\/Compiled\/[^/]+$/i, '');
+  const sections = parseWorkingDraft(await plugin.app.vault.read(draft));
+  if (!sections.length) {
+    new Notice('This Working Draft has no linked scene headings.');
+    return;
+  }
+
+  const changes = [];
+  const missing = [];
+  for (const section of sections) {
+    const path = normalizePath(linkedFilePath(bookDir, `[[${section.path}]]`, 'Manuscript', section.title));
+    if (!path.startsWith(`${bookDir}/Manuscript/`)) {
+      missing.push(section.title);
+      continue;
+    }
+    const file = plugin.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) {
+      missing.push(section.title);
+      continue;
+    }
+    const current = await plugin.app.vault.read(file);
+    if (normalized(stripManuscript(current, section.title)) !== normalized(section.prose)) {
+      changes.push({ title: section.title, path, file, current, prose: section.prose });
+    }
+  }
+
+  if (!changes.length) {
+    new Notice(missing.length
+      ? `No manuscripts need updating. ${missing.length} linked file${missing.length === 1 ? ' is' : 's are'} missing.`
+      : 'No manuscript changes found in this Working Draft.');
+    return;
+  }
+
+  new WorkingDraftSyncModal(plugin.app, changes, async selected => {
+    if (!selected.length) {
+      new Notice('No manuscripts selected; nothing was updated.');
+      return;
+    }
+    let updated = 0;
+    for (const change of selected) {
+      await plugin.app.vault.modify(
+        change.file,
+        replaceManuscriptProse(change.current, change.title, change.prose)
+      );
+      updated++;
+    }
+    const missingText = missing.length ? ` ${missing.length} linked file${missing.length === 1 ? ' was' : 's were'} missing.` : '';
+    new Notice(`Updated ${updated} Manuscript file${updated === 1 ? '' : 's'} from Working Draft.${missingText}`);
+  }).open();
+}
+
+module.exports = { workingDraftToManuscript };
 
 },
 "lib/dashboard.js": function (require, module, exports) {
@@ -1076,7 +1147,51 @@ function stripManuscript(content, title) {
   return body.trim();
 }
 
-module.exports = { sceneTemplate, manuscriptTemplate, dashboardTemplate, sparkTemplate, stripManuscript };
+function replaceManuscriptProse(content, title, prose) {
+  const source = String(content || '');
+  const frontmatter = source.match(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/);
+  const header = frontmatter ? `${frontmatter[0].trimEnd()}\n\n` : '';
+  const body = String(prose || '').trim();
+  return `${header}# ${title}\n${body ? `\n${body}\n` : '\n'}`;
+}
+
+function parseWorkingDraft(content) {
+  const sections = [];
+  let current = null;
+
+  const finish = () => {
+    if (!current) return;
+    current.prose = current.lines.join('\n').trim();
+    delete current.lines;
+    sections.push(current);
+    current = null;
+  };
+
+  for (const line of String(content || '').replace(/\r\n/g, '\n').split('\n')) {
+    const heading = line.match(/^###\s+\[\[([^\]|]+)(?:\|([^\]]+))?\]\]\s*$/);
+    if (heading) {
+      finish();
+      current = {
+        path: heading[1].trim(),
+        title: (heading[2] || heading[1].split('/').pop()).trim(),
+        lines: []
+      };
+      continue;
+    }
+    if (current && /^#\s+(?:Chapter\b|Unassigned\s*$)/i.test(line)) {
+      finish();
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  finish();
+  return sections;
+}
+
+module.exports = {
+  sceneTemplate, manuscriptTemplate, dashboardTemplate, sparkTemplate,
+  stripManuscript, replaceManuscriptProse, parseWorkingDraft
+};
 
 },
 "modals/project.js": function (require, module, exports) {
@@ -1274,6 +1389,67 @@ class ValidateModal extends Modal {
 }
 
 module.exports = { ValidateModal };
+
+},
+"modals/working-draft.js": function (require, module, exports) {
+const { Modal, Setting } = require('obsidian');
+
+class WorkingDraftSyncModal extends Modal {
+  constructor(app, changes, onUpdate) {
+    super(app);
+    this.changes = changes;
+    this.onUpdate = onUpdate;
+    this.checkboxes = [];
+  }
+
+  onOpen() {
+    const root = this.contentEl;
+    root.addClass('writing-system-working-draft-modal');
+    root.createEl('h2', { text: 'Working Draft to Manuscript' });
+    root.createEl('p', {
+      text: 'Only the checked Manuscript files will be replaced with prose from this Working Draft.'
+    });
+
+    const controls = root.createDiv({ cls: 'writing-system-selection-controls' });
+    const selectAll = controls.createEl('button', { text: 'Select all' });
+    const selectNone = controls.createEl('button', { text: 'Select none' });
+    selectAll.onclick = () => this.setAll(true);
+    selectNone.onclick = () => this.setAll(false);
+
+    const list = root.createDiv({ cls: 'writing-system-change-list' });
+    this.changes.forEach((change, index) => {
+      const row = list.createDiv({ cls: 'writing-system-change-row' });
+      const checkbox = row.createEl('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = true;
+      checkbox.id = `writing-system-change-${index}`;
+      const label = row.createEl('label', { text: change.title });
+      label.htmlFor = checkbox.id;
+      row.createDiv({ cls: 'writing-system-change-path', text: change.path });
+      this.checkboxes.push({ checkbox, change });
+    });
+
+    const actions = root.createDiv({ cls: 'writing-system-modal-actions' });
+    new Setting(actions)
+      .addButton(button => button.setButtonText('Cancel').onClick(() => this.close()))
+      .addButton(button => button.setButtonText('Update selected').setCta().onClick(async () => {
+        const selected = this.checkboxes.filter(item => item.checkbox.checked).map(item => item.change);
+        this.close();
+        await this.onUpdate(selected);
+      }));
+  }
+
+  setAll(checked) {
+    this.checkboxes.forEach(item => { item.checkbox.checked = checked; });
+  }
+
+  onClose() {
+    this.checkboxes = [];
+    this.contentEl.empty();
+  }
+}
+
+module.exports = { WorkingDraftSyncModal };
 
 },
 "services/files.js": function (require, module, exports) {

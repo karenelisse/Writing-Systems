@@ -1,7 +1,7 @@
 {
   "id": "writing-system",
   "name": "Writing System",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "minAppVersion": "1.5.0",
   "description": "Dashboard-first novel planning, paired scene/manuscript files, reordering, syncing, and compilation.",
   "author": "Local",
