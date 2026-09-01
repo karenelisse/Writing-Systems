@@ -240,4 +240,13 @@ async function regenerateIndexes(plugin, dashboard, rs) {
   }
 }
 
-module.exports = { dashboards, chooseDashboard, openDashboard, reorderScenes, applyDashboard, applyDashboardFile, regenerateIndexes };
+module.exports = {
+  dashboards,
+  chooseDashboard,
+  openDashboard,
+  reorderScenes,
+  applyDashboard,
+  applyDashboardFile,
+  regenerateIndexes,
+  resolvePairPath
+};

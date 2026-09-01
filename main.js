@@ -461,13 +461,25 @@ async function regenerateIndexes(plugin, dashboard, rs) {
   }
 }
 
-module.exports = { dashboards, chooseDashboard, openDashboard, reorderScenes, applyDashboard, applyDashboardFile, regenerateIndexes };
+module.exports = {
+  dashboards,
+  chooseDashboard,
+  openDashboard,
+  reorderScenes,
+  applyDashboard,
+  applyDashboardFile,
+  regenerateIndexes,
+  resolvePairPath
+};
 
 },
 "commands/index.js": function (require, module, exports) {
 const { newProject } = require('./project');
 const { openDashboard, reorderScenes, applyDashboard } = require('./dashboard');
-const { newScene } = require('./scene');
+const {
+  newScene,
+  deleteScene,
+} = require('./scene');
 const { compile, compileWorkingDraft } = require('./compile');
 const { workingDraftToManuscript } = require('./working-draft');
 const { openPaired, validateBook } = require('./navigation');
@@ -476,6 +488,7 @@ function registerCommands(plugin) {
   plugin.addCommand({ id:'new-project', name:'New Project', callback:()=>newProject(plugin) });
   plugin.addCommand({ id:'open-dashboard', name:'Open Dashboard', callback:()=>openDashboard(plugin) });
   plugin.addCommand({ id:'new-scene', name:'New Scene', callback:()=>newScene(plugin) });
+  plugin.addCommand({ id:'delete-scene', name:'Delete Scene', callback:()=>deleteScene(plugin) });
   plugin.addCommand({ id:'reorder-scenes', name:'Reorder Scenes', callback:()=>reorderScenes(plugin) });
   plugin.addCommand({ id:'apply-dashboard', name:'Apply Dashboard', callback:()=>applyDashboard(plugin) });
   plugin.addCommand({ id:'compile-manuscript', name:'Compile Manuscript', callback:()=>compile(plugin, false) });
@@ -614,48 +627,316 @@ module.exports = { newProject };
 },
 "commands/scene.js": function (require, module, exports) {
 const { Notice, TFile } = require('obsidian');
+
 const { SceneModal } = require('../modals/scene');
-const { cleanTitle, bookInfo, parseRows, replaceRows, extractLinks } = require('../lib/dashboard');
-const { sceneTemplate, manuscriptTemplate } = require('../lib/templates');
-const { createMissing } = require('../services/files');
-const { chooseDashboard, applyDashboardFile } = require('./dashboard');
+
+const {
+  DeleteSceneModal
+} = require('../modals/delete-scene');
+
+const {
+  cleanTitle,
+  bookInfo,
+  parseRows,
+  replaceRows,
+  extractLinks,
+  parseWiki,
+  basename,
+  stripOrderPrefix
+} = require('../lib/dashboard');
+
+const {
+  sceneTemplate,
+  manuscriptTemplate
+} = require('../lib/templates');
+
+const {
+  createMissing
+} = require('../services/files');
+
+const {
+  chooseDashboard,
+  applyDashboardFile,
+  resolvePairPath
+} = require('./dashboard');
+
 
 async function newScene(plugin) {
   const d = await chooseDashboard(plugin);
+
   if (!d) return;
+
   const I = bookInfo(d.path);
+
   new SceneModal(plugin.app, async v => {
     const title = cleanTitle(v.title);
+
     const sp = `${I.bookDir}/Scenes/${title}.md`;
     const mp = `${I.bookDir}/Manuscript/${title}.md`;
-    if (plugin.app.vault.getAbstractFileByPath(sp) || plugin.app.vault.getAbstractFileByPath(mp)) {
-      new Notice('That scene already exists. Use a distinct title such as Pt 2.');
+
+    if (
+      plugin.app.vault.getAbstractFileByPath(sp) ||
+      plugin.app.vault.getAbstractFileByPath(mp)
+    ) {
+      new Notice(
+        'That scene already exists. Use a distinct title such as Pt 2.'
+      );
+
       return;
     }
-    const content = await plugin.app.vault.read(d);
-    const rs = parseRows(content);
-    const order = (rs.length + 1) * 100;
-    const locations = extractLinks(v.locations);
-    await createMissing(plugin, sp, sceneTemplate({...I, ...v, title, locations, order}));
-    await createMissing(plugin, mp, manuscriptTemplate({...I, ...v, title, locations, order}));
+
+    const content =
+      await plugin.app.vault.read(d);
+
+    const rs =
+      parseRows(content);
+
+    const order =
+      (rs.length + 1) * 100;
+
+    const locations =
+      extractLinks(v.locations);
+
+    await createMissing(
+      plugin,
+      sp,
+      sceneTemplate({
+        ...I,
+        ...v,
+        title,
+        locations,
+        order
+      })
+    );
+
+    await createMissing(
+      plugin,
+      mp,
+      manuscriptTemplate({
+        ...I,
+        ...v,
+        title,
+        locations,
+        order
+      })
+    );
+
     rs.push({
-      sceneLink:`[[Scenes/${title}|${title}]]`,
-      sceneStatus:v.sceneStatus,
-      manuscriptLink:`[[Manuscript/${title}|${title}]]`,
-      manuscriptStatus:v.manuscriptStatus,
-      pov:v.pov ? `[[${v.pov}]]` : '',
-      locations:locations.join(', '),
-      chapter:v.chapter || ''
+      sceneLink: `[[Scenes/${title}|${title}]]`,
+      sceneStatus: v.sceneStatus,
+      manuscriptLink: `[[Manuscript/${title}|${title}]]`,
+      manuscriptStatus: v.manuscriptStatus,
+      pov: v.pov ? `[[${v.pov}]]` : '',
+      locations: locations.join(', '),
+      chapter: v.chapter || ''
     });
-    await plugin.app.vault.modify(d, replaceRows(content, rs));
-    await applyDashboardFile(plugin, d, false);
-    const f = plugin.app.vault.getAbstractFileByPath(sp);
-    if (f instanceof TFile) await plugin.app.workspace.getLeaf(false).openFile(f);
+
+    await plugin.app.vault.modify(
+      d,
+      replaceRows(content, rs)
+    );
+
+    await applyDashboardFile(
+      plugin,
+      d,
+      false
+    );
+
+    const f =
+      plugin.app.vault.getAbstractFileByPath(sp);
+
+    if (f instanceof TFile) {
+      await plugin.app.workspace
+        .getLeaf(false)
+        .openFile(f);
+    }
+
     new Notice(`Created ${title}`);
   }).open();
 }
 
-module.exports = { newScene };
+
+async function deleteScene(plugin) {
+  const d =
+    await chooseDashboard(plugin);
+
+  if (!d) return;
+
+  let rows;
+
+  try {
+    const content =
+      await plugin.app.vault.read(d);
+
+    rows =
+      parseRows(content);
+  } catch (e) {
+    console.error(
+      'Writing System: could not read Dashboard',
+      e
+    );
+
+    new Notice(
+      `Could not read Dashboard: ${e.message}`
+    );
+
+    return;
+  }
+
+  if (!rows.length) {
+    new Notice(
+      'There are no scenes to delete.'
+    );
+
+    return;
+  }
+
+  new DeleteSceneModal(
+    plugin.app,
+    rows,
+    async (selectedIndex, displayedTitle) => {
+      try {
+        /*
+         * Re-read the Dashboard before deleting,
+         * in case it changed while the modal was open.
+         */
+        const currentContent =
+          await plugin.app.vault.read(d);
+
+        const currentRows =
+          parseRows(currentContent);
+
+        const row =
+          currentRows[selectedIndex];
+
+        if (!row) {
+          new Notice(
+            'That scene is no longer in the Dashboard.'
+          );
+
+          return;
+        }
+
+        const I =
+          bookInfo(d.path);
+
+        const sceneWiki =
+          parseWiki(row.sceneLink);
+
+        const manuscriptWiki =
+          parseWiki(row.manuscriptLink);
+
+        const title = stripOrderPrefix(
+          sceneWiki.label ||
+          basename(sceneWiki.path) ||
+          manuscriptWiki.label ||
+          basename(manuscriptWiki.path) ||
+          displayedTitle
+        );
+
+        if (!title) {
+          throw new Error(
+            `Could not determine the scene title for row ${
+              selectedIndex + 1
+            }.`
+          );
+        }
+
+        const scenePath =
+          resolvePairPath(
+            plugin,
+            I.bookDir,
+            row.sceneLink,
+            'Scenes',
+            title
+          );
+
+        const manuscriptPath =
+          resolvePairPath(
+            plugin,
+            I.bookDir,
+            row.manuscriptLink,
+            'Manuscript',
+            title
+          );
+
+        const sceneFile =
+          plugin.app.vault.getAbstractFileByPath(
+            scenePath
+          );
+
+        const manuscriptFile =
+          plugin.app.vault.getAbstractFileByPath(
+            manuscriptPath
+          );
+
+        /*
+         * Remove the selected Dashboard row.
+         */
+        currentRows.splice(
+          selectedIndex,
+          1
+        );
+
+        await plugin.app.vault.modify(
+          d,
+          replaceRows(
+            currentContent,
+            currentRows
+          )
+        );
+
+        /*
+         * Move files to Obsidian's local .trash.
+         */
+        if (sceneFile instanceof TFile) {
+          await plugin.app.vault.trash(
+            sceneFile,
+            false
+          );
+        }
+
+        if (
+          manuscriptFile instanceof TFile
+        ) {
+          await plugin.app.vault.trash(
+            manuscriptFile,
+            false
+          );
+        }
+
+        /*
+         * Let the existing Dashboard logic handle
+         * renumbering and index regeneration.
+         */
+        await applyDashboardFile(
+          plugin,
+          d,
+          false
+        );
+
+        new Notice(
+          `Deleted ${title}`
+        );
+      } catch (e) {
+        console.error(
+          'Writing System: delete scene failed',
+          e
+        );
+
+        new Notice(
+          `Could not delete scene: ${e.message}`
+        );
+      }
+    }
+  ).open();
+}
+
+
+module.exports = {
+  newScene,
+  deleteScene
+};
 
 },
 "commands/working-draft.js": function (require, module, exports) {
@@ -1191,6 +1472,168 @@ function parseWorkingDraft(content) {
 module.exports = {
   sceneTemplate, manuscriptTemplate, dashboardTemplate, sparkTemplate,
   stripManuscript, replaceManuscriptProse, parseWorkingDraft
+};
+
+},
+"modals/delete-scene.js": function (require, module, exports) {
+const { Modal, Setting } = require('obsidian');
+
+const {
+  parseWiki,
+  basename,
+  stripOrderPrefix
+} = require('../lib/dashboard');
+
+class DeleteSceneModal extends Modal {
+  constructor(app, rows, onConfirm) {
+    super(app);
+
+    this.rows = rows;
+    this.onConfirm = onConfirm;
+    this.selectedIndex = null;
+  }
+
+  onOpen() {
+    this.render();
+  }
+
+  render() {
+    this.contentEl.empty();
+
+    this.contentEl.createEl('h2', {
+      text: 'Delete Scene'
+    });
+
+    this.contentEl.createEl('p', {
+      text: 'Select one scene to delete.'
+    });
+
+    const listEl = this.contentEl.createDiv({
+      cls: 'writing-system-delete-scene-list'
+    });
+
+    this.rows.forEach((row, index) => {
+      const wiki = parseWiki(row.sceneLink);
+
+      const title = stripOrderPrefix(
+        wiki.label || basename(wiki.path)
+      );
+
+      const setting = new Setting(listEl)
+        .setName(title)
+        .setDesc(`Scene ${index + 1}`);
+
+      setting.addToggle(toggle => {
+        toggle.setValue(index === this.selectedIndex);
+
+        toggle.onChange(value => {
+          if (value) {
+            this.selectedIndex = index;
+          } else if (this.selectedIndex === index) {
+            this.selectedIndex = null;
+          }
+
+          this.render();
+        });
+      });
+    });
+
+    const actions = new Setting(this.contentEl);
+
+    actions.addButton(button => {
+      button
+        .setButtonText('Cancel')
+        .onClick(() => {
+          this.close();
+        });
+    });
+
+    actions.addButton(button => {
+      button
+        .setButtonText('Delete Scene')
+        .setWarning()
+        .setDisabled(this.selectedIndex === null)
+        .onClick(() => {
+          if (this.selectedIndex === null) {
+            return;
+          }
+
+          const row = this.rows[this.selectedIndex];
+          const wiki = parseWiki(row.sceneLink);
+
+          const title = stripOrderPrefix(
+            wiki.label || basename(wiki.path)
+          );
+
+          const index = this.selectedIndex;
+
+          this.close();
+
+          new ConfirmDeleteSceneModal(
+            this.app,
+            title,
+            () => this.onConfirm(index, title)
+          ).open();
+        });
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class ConfirmDeleteSceneModal extends Modal {
+  constructor(app, title, onConfirm) {
+    super(app);
+
+    this.title = title;
+    this.onConfirm = onConfirm;
+  }
+
+  onOpen() {
+    this.contentEl.createEl('h2', {
+      text: 'Delete Scene?'
+    });
+
+    this.contentEl.createEl('p', {
+      text: this.title
+    });
+
+    this.contentEl.createEl('p', {
+      text:
+        'This will remove the scene from the Dashboard and move both its Scene and Manuscript files to Obsidian .trash.'
+    });
+
+    const actions = new Setting(this.contentEl);
+
+    actions.addButton(button => {
+      button
+        .setButtonText('Cancel')
+        .onClick(() => {
+          this.close();
+        });
+    });
+
+    actions.addButton(button => {
+      button
+        .setButtonText('Delete Scene')
+        .setWarning()
+        .onClick(async () => {
+          this.close();
+          await this.onConfirm();
+        });
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+module.exports = {
+  DeleteSceneModal,
+  ConfirmDeleteSceneModal
 };
 
 },

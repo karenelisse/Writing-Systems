@@ -1,6 +1,9 @@
 const { newProject } = require('./project');
 const { openDashboard, reorderScenes, applyDashboard } = require('./dashboard');
-const { newScene } = require('./scene');
+const {
+  newScene,
+  deleteScene,
+} = require('./scene');
 const { compile, compileWorkingDraft } = require('./compile');
 const { workingDraftToManuscript } = require('./working-draft');
 const { openPaired, validateBook } = require('./navigation');
@@ -9,6 +12,7 @@ function registerCommands(plugin) {
   plugin.addCommand({ id:'new-project', name:'New Project', callback:()=>newProject(plugin) });
   plugin.addCommand({ id:'open-dashboard', name:'Open Dashboard', callback:()=>openDashboard(plugin) });
   plugin.addCommand({ id:'new-scene', name:'New Scene', callback:()=>newScene(plugin) });
+  plugin.addCommand({ id:'delete-scene', name:'Delete Scene', callback:()=>deleteScene(plugin) });
   plugin.addCommand({ id:'reorder-scenes', name:'Reorder Scenes', callback:()=>reorderScenes(plugin) });
   plugin.addCommand({ id:'apply-dashboard', name:'Apply Dashboard', callback:()=>applyDashboard(plugin) });
   plugin.addCommand({ id:'compile-manuscript', name:'Compile Manuscript', callback:()=>compile(plugin, false) });
