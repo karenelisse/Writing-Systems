@@ -1,0 +1,16 @@
+{
+  "name": "writing-system",
+  "private": true,
+  "version": "2.3.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "node build-bundle.js",
+    "check": "node scripts/check.js"
+  },
+  "devDependencies": {
+    "yaml": "2.7.0"
+  }
+}

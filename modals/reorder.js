@@ -2,10 +2,11 @@ const { Modal, Setting } = require('obsidian');
 const { parseWiki, basename } = require('../lib/dashboard');
 
 class ReorderModal extends Modal {
-  constructor(app, rows, onSave) {
+  constructor(app, rows, onSave, title = 'Reorder scenes') {
     super(app);
     this.rows = rows.map(r => ({...r}));
     this.onSave = onSave;
+    this.title = title;
   }
   name(row) {
     const x = parseWiki(row.sceneLink);
@@ -14,7 +15,7 @@ class ReorderModal extends Modal {
   draw() {
     const e = this.contentEl;
     e.empty();
-    e.createEl('h2', { text:'Reorder scenes' });
+    e.createEl('h2', { text:this.title });
     e.createEl('p', { text:'Use ↑ / ↓. Save order + apply updates the Dashboard and paired files.' });
     this.rows.forEach((row, i) => {
       const wrap = e.createDiv({ cls:'writing-system-reorder-row' });

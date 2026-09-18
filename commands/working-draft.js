@@ -13,7 +13,12 @@ async function workingDraftToManuscript(plugin) {
   }
 
   const bookDir = draft.path.replace(/\/Compiled\/[^/]+$/i, '');
-  const sections = parseWorkingDraft(await plugin.app.vault.read(draft));
+  const draftContent = await plugin.app.vault.read(draft);
+  const companion = await require('../services/working-draft').readDraftMetadata(plugin,draft.path);
+  const sections = companion ? require('../lib/working-draft').parseMappedDraft(draftContent,companion.metadata,bookDir) : parseWorkingDraft(draftContent);
+  const root = require('../services/project').rootFromPath(draft.path);
+  const state = root ? await require('../services/reconciliation').readState(plugin,root) : null;
+  const seen = new Set();
   if (!sections.length) {
     new Notice('This Working Draft has no linked scene headings.');
     return;
@@ -22,11 +27,14 @@ async function workingDraftToManuscript(plugin) {
   const changes = [];
   const missing = [];
   for (const section of sections) {
-    const path = normalizePath(linkedFilePath(bookDir, `[[${section.path}]]`, 'Manuscript', section.title));
-    if (!path.startsWith(`${bookDir}/Manuscript/`)) {
-      missing.push(section.title);
-      continue;
-    }
+    const established = section.id && state?.scenes.find(s => s.id === section.id);
+    const path = established ? established.manuscriptPath : normalizePath(linkedFilePath(bookDir, `[[${section.path}]]`, 'Manuscript', section.title));
+    require('../lib/project').assertPath(path);
+    if (seen.has(path.toLowerCase())) throw Error('Working Draft contains duplicate scene sections.');
+    seen.add(path.toLowerCase());
+    if (section.id && !established) throw Error('Working Draft references a deleted or unknown Scene.');
+    if (!path.startsWith(bookDir + '/Manuscript/')) throw Error('This Working Draft contains a Scene moved to another Book. Preserve its edits and compile a new draft before syncing.');
+
     const file = plugin.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       missing.push(section.title);
@@ -45,22 +53,32 @@ async function workingDraftToManuscript(plugin) {
     return;
   }
 
-  new WorkingDraftSyncModal(plugin.app, changes, async selected => {
+  new WorkingDraftSyncModal(plugin.app, changes, require('./parts').guarded(async selected => {
     if (!selected.length) {
       new Notice('No manuscripts selected; nothing was updated.');
       return;
     }
-    let updated = 0;
-    for (const change of selected) {
-      await plugin.app.vault.modify(
-        change.file,
-        replaceManuscriptProse(change.current, change.title, change.prose)
-      );
-      updated++;
-    }
+    if (await plugin.app.vault.read(draft) !== draftContent) throw Error('Working Draft changed; reopen sync.');
+    for (const change of selected) if (await plugin.app.vault.read(change.file) !== change.current) throw Error('Manuscript changed; reopen sync.');
+    await require('../services/transactions').execute(plugin,{
+      root,
+      files:selected.map(change=>({source:change.path,target:change.path,before:change.current,after:replaceManuscriptProse(change.current,change.title,change.prose)})),
+      folders:[],checks:[{path:draft.path,content:draftContent},...(companion ? [{path:companion.path,content:companion.content}] : [])]
+    });
+    const updated = selected.length;
     const missingText = missing.length ? ` ${missing.length} linked file${missing.length === 1 ? ' was' : 's were'} missing.` : '';
     new Notice(`Updated ${updated} Manuscript file${updated === 1 ? '' : 's'} from Working Draft.${missingText}`);
-  }).open();
+  })).open();
 }
 
-module.exports = { workingDraftToManuscript };
+async function cleanWorkingDraft(plugin) {
+  const draft = plugin.app.workspace.getActiveFile();
+  if (!(draft instanceof TFile) || !/\/Compiled\/[^/]+ - Working Draft\.md$/i.test(draft.path)) throw Error('Open a compiled Working Draft first.');
+  const content = await plugin.app.vault.read(draft);
+  const result = require('../lib/working-draft').cleanLegacyDraft(content,draft.path,draft.path.replace(/\/Compiled\/[^/]+$/i,''));
+  if (!result) { new Notice('No Writing System comments to remove.'); return; }
+  await require('../services/working-draft').saveDraft(plugin,draft.path,result.content,result.metadata,[{path:draft.path,content}]);
+  new Notice('Removed Working Draft sync comments. Draft edits were preserved.');
+}
+
+module.exports = { workingDraftToManuscript, cleanWorkingDraft };

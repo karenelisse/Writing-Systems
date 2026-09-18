@@ -22,7 +22,7 @@ async function compileBook(plugin, copyToClipboard) {
 
   let rs;
   try {
-    rs = parseRows(dashboardContent);
+    rs = await require('../lib/compilation').compilationRows(plugin,d,dashboardContent);
   } catch (e) {
     new Notice(`Compile failed: ${e.message}`);
     return;
@@ -31,6 +31,7 @@ async function compileBook(plugin, copyToClipboard) {
   const bodyParts = [];
   const chapterMap = new Map();
   const hasChapter = rs.some(r => String(r.chapter || '').trim());
+  let currentPart = null;
   let currentChapter = null;
   let compiled = 0;
   let empty = 0;
@@ -58,6 +59,7 @@ async function compileBook(plugin, copyToClipboard) {
       continue;
     }
 
+    if (r.partHeading && r.partHeading !== currentPart) { bodyParts.push(r.partHeading); currentPart = r.partHeading; currentChapter = null; }
     const ch = String(r.chapter || '').trim();
     if (hasChapter && ch !== currentChapter) {
       bodyParts.push(ch ? `# Chapter ${ch}` : '# Unassigned');
@@ -127,9 +129,12 @@ async function compileWorkingDraft(plugin) {
 
     const info = bookInfo(d.path);
     const dashboardContent = await plugin.app.vault.read(d);
-    const rows = parseRows(dashboardContent);
+    const rows = await require('../lib/compilation').compilationRows(plugin,d,dashboardContent);
     const bodyParts = [];
+    const sections = [];
+    const checks = [{path:d.path,content:dashboardContent}];
     const hasChapter = rows.some(row => String(row.chapter || '').trim());
+    let currentPart = null;
     let currentChapter = null;
     let compiled = 0;
     let empty = 0;
@@ -149,20 +154,26 @@ async function compileWorkingDraft(plugin) {
         continue;
       }
 
-      const prose = stripManuscript(await plugin.app.vault.read(manuscript), title);
+      const manuscriptContent = await plugin.app.vault.read(manuscript);
+      checks.push({path:manuscriptPath,content:manuscriptContent});
+      const prose = stripManuscript(manuscriptContent, title);
       if (!prose) {
         empty++;
         continue;
       }
 
+      const before = [];
+      if (row.partHeading && row.partHeading !== currentPart) { before.push(row.partHeading); bodyParts.push(row.partHeading); currentPart = row.partHeading; currentChapter = null; }
       const chapter = String(row.chapter || '').trim();
       if (hasChapter && chapter !== currentChapter) {
-        bodyParts.push(chapter ? `# Chapter ${chapter}` : '# Unassigned');
+        const heading = chapter ? `# Chapter ${chapter}` : '# Unassigned';
+        before.push(heading); bodyParts.push(heading);
         currentChapter = chapter;
       }
 
       const manuscriptLink = manuscriptPath.slice(info.bookDir.length + 1).replace(/\.md$/i, '');
       bodyParts.push(`### [[${manuscriptLink}|${title}]]\n\n${prose}`);
+      sections.push({id:row.id || null,path:manuscriptPath,title,before});
       compiled++;
     }
 
@@ -176,12 +187,11 @@ async function compileWorkingDraft(plugin) {
       : `${titleBlock}\n`;
 
     const outDir = normalizePath(`${info.bookDir}/Compiled`);
-    await ensureFolder(plugin, outDir);
     const outputName = safeFilename(`${workingTitle} - Working Draft`) || `${info.bookName} - Working Draft`;
     const outPath = normalizePath(`${outDir}/${outputName}.md`);
-    let output = plugin.app.vault.getAbstractFileByPath(outPath);
-    if (output instanceof TFile) await plugin.app.vault.modify(output, full);
-    else output = await plugin.app.vault.create(outPath, full);
+    let output = await require('../services/working-draft').saveDraft(plugin,outPath,full,{
+      kind:require('../lib/working-draft').KIND,version:1,draftPath:outPath,sections
+    },checks);
 
     const detail = missingTitles.length
       ? ` Missing: ${missingTitles.slice(0, 5).join(', ')}${missingTitles.length > 5 ? '…' : ''}`
