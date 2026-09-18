@@ -17,7 +17,7 @@ const factories = entries.map(id => {
   return `${JSON.stringify(id)}: function (require, module, exports) {\n${source}\n}`;
 });
 
-const bundle = `/* Writing System v2.2.0 - generated bundle. Edit source modules, then rebuild. */
+const bundle = `/* Writing System v2.3.0 - generated bundle. Edit source modules, then rebuild. */
 'use strict';
 
 const __externalRequire = require;
@@ -46,8 +46,8 @@ function __load(id) {
   if (!factory) throw new Error('Writing System bundle module is missing: ' + id);
   const module = { exports: {} };
   __cache[id] = module;
-  const localRequire = request => request === 'obsidian'
-    ? __externalRequire('obsidian')
+  const localRequire = request => !request.startsWith('.')
+    ? __externalRequire(request)
     : __load(__resolve(id, request));
   factory(localRequire, module, module.exports);
   return module.exports;

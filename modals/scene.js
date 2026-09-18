@@ -1,11 +1,13 @@
 const { Modal, Setting, Notice } = require('obsidian');
 
 class SceneModal extends Modal {
-  constructor(app, cb) {
+  constructor(app, cb, options = {}) {
     super(app);
     this.cb = cb;
+    this.parts = options.parts || [];
     this.v = {
       title: "",
+      partId: options.selectedPartId || this.parts[0]?.id || "",
       pov: "",
       locations: "",
       chapter: "",
@@ -19,6 +21,12 @@ class SceneModal extends Modal {
     this.modalEl.addClass("writing-system-scene-modal");
     e.createEl("h2", { text: "New scene" });
 
+    if(this.parts.length){
+      new Setting(e).setName('Part').addDropdown(dropdown=>{
+        for(const part of this.parts)dropdown.addOption(part.id,'Part '+part.number+' \u2014 '+part.name);
+        dropdown.setValue(this.v.partId).onChange(value=>this.v.partId=value);
+      });
+    }
     let titleInput;
 
     new Setting(e)

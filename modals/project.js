@@ -4,7 +4,7 @@ class ProjectModal extends Modal {
   constructor(app, cb) {
     super(app);
     this.cb = cb;
-    this.v = { name: '', books: 1, optional: [], custom: '' };
+    this.v = { name: '', books: 1, optional: [], custom: '', parts: false };
   }
   onOpen() {
     const e = this.contentEl;
@@ -19,6 +19,7 @@ class ProjectModal extends Modal {
         t.onChange(v => this.v.books = Math.max(1, parseInt(v) || 1));
       });
 
+    new Setting(e).setName('Use Parts throughout this project').setDesc('Start each Book with one Part. Existing projects use Enable Parts for Project instead.').addToggle(t=>t.onChange(v=>this.v.parts=v));
     e.createEl('h3', { text: 'Optional folders' });
     ['Animals','Species','Lore','Magic','Timeline','Research','Creatures','History','Cultures','Religions','Politics','Organizations','Artifacts','Languages','Plants','Food','Maps']
       .forEach(name => {

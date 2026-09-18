@@ -34,9 +34,12 @@ const {
 
 
 async function newScene(plugin) {
-  const d = await chooseDashboard(plugin);
+  const activeFile = plugin.app.workspace.getActiveFile();
+  const d = await chooseDashboard(plugin, {sceneContext:true,activeFile});
 
   if (!d) return;
+
+  if (await require('./part-scenes').create(plugin,d,{activeFile})) return;
 
   const I = bookInfo(d.path);
 
@@ -133,6 +136,8 @@ async function deleteScene(plugin) {
     await chooseDashboard(plugin);
 
   if (!d) return;
+
+  if (await require('./part-scenes').remove(plugin,d)) return;
 
   let rows;
 

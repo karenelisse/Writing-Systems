@@ -235,3 +235,139 @@ After making changes, run:
 `node build-bundle.js`
 
 Then copy `dist/main.js` to the repository root before committing.
+
+## Optional Parts (2.3.0)
+
+Parts are enabled for an entire writing project. Existing projects stay flat until
+**Enable Parts for Project** is run explicitly. A simple Parts project can contain
+one Book and one Part.
+
+The hierarchy is Story > Book > Part > Chapter > Scene. Parts are numbered across
+the whole Story, Chapters across each Book, and Scene filenames restart at `001`
+inside each Part. Chapters may be blank while planning, but an assigned Chapter
+cannot span Parts. A Part belongs to one Book. A Scene can move to any Part in the same Story, including a Part in another Book,
+using **Move Scene to Part**.
+
+```text
+Writing/My Story/Plot/
+  Master Dashboard.md
+  Writing System State.json
+  Book 1/
+    Dashboard.md
+    Scenes/Part 1/001 - Opening.md
+    Manuscript/Part 1/001 - Opening.md
+    Compiled/Chapters/
+```
+
+### Migrating an existing project
+
+1. For your first trial, open a separate copy of the vault in Obsidian.
+2. Open a Book Dashboard and run **Validate Project**. Resolve missing pairs and
+   add any unlisted paired Scenes to their existing Dashboard before migration.
+3. Run **Enable Parts for Project** and enter an initial descriptive Part name.
+   Each existing Book gets its own initial Part, containing all its paired Scenes.
+4. Review the file-by-file preview, then choose **Apply**. Cancelling the preview
+   leaves the project unchanged.
+5. Run **Validate Project** again. Use **New Part**, **Move Scene to Part**, and
+   **Move Part to Book** to arrange the Story.
+
+Migration preserves manuscript prose, planning notes, custom Dashboard text, and
+unknown frontmatter fields. IDs are assigned once and survive subsequent moves.
+Unlisted files, incomplete pairs, conflicting identity records, or occupied
+file destinations block reconciliation before changes. A missing member of an
+existing pair is never silently replaced with an empty manuscript. New Dashboard
+rows can create both files when neither already exists.
+
+### Dashboard authority and commands
+
+**Open Master Dashboard** opens the project's Book/Part overview. On a legacy
+project it creates that overview in flat mode; this does not enable Parts.
+Apply it once before using commands that require its applied state.
+
+The Master has a readable outline and an editable JSON definition. Book array
+order controls Book numbering; each Book's Part array controls its Part order.
+Edit `title` for Books and `name` for Parts. Keep `id` and `version` values intact.
+Run **Apply Master Dashboard** after editing. Use **New Part** to generate an ID
+for a new Part. Part ownership changes append the moved Part to its destination
+Book; use **Reorder Parts** afterward to position it.
+
+Book Dashboards control Scene rows, statuses, POV, locations, and Chapter
+assignments. Part headings and identity comments come from the Master. Use
+**Apply Dashboard** after editing Scene rows. Managed-project reconciliation
+checks the whole project and applies Dashboard values across its Books.
+
+- **New Scene** uses the Book containing the active file. Outside a Book, it asks
+  which Book to use; a project-level file limits the choices to that project.
+  The New Scene form lets you select a Part within that Book, preselecting the
+  current Part when it can be identified. New Scenes append to the selected Part.
+- **Reorder Scenes** operates within a selected Part.
+- **Move Scene to Part** offers Parts across the entire story, including other Books, and appends it to the destination
+  Part and clears its former Chapter assignment. Assign its new Chapter afterward.
+- **Reorder Parts** uses up/down buttons.
+- **Move Part to Book** moves all files under both Part folders, preserves Part
+  notes in the Dashboard, and updates affected numbers and links.
+- **Validate Book** and **Validate Project** only report; they never repair files.
+- Removing existing Book/Part definitions is rejected rather than deleting their
+  content. Disabling Parts after migration is not implemented.
+
+`Writing System State.json` records the last applied identities and locations;
+it is not an alternative editable source of truth. `Part Identity.json` in each
+Part folder identifies even an empty Part. Keep these files with your project.
+
+### Compilation and Working Drafts
+
+Both compilation commands include Part headings by default. Set `partHeadings`
+to `false` in the Master definition and apply it to omit them. Generated Chapter
+files remain in each Book's `Compiled/Chapters` directory. As before, compilation
+does not automatically delete old Chapter output files.
+
+Working Drafts contain Markdown headings and prose, with no generated sync comments.
+Scene identities and boundaries are stored in the adjacent `- Working Draft.sync.json`
+file; keep that companion file with the draft. Preserve generated linked Scene
+headings and Part/Chapter headings when editing. To clean an older draft without
+losing unsynced edits, open it and run **Remove Working Draft Comments**. Older
+commented drafts still support sync. Part/Chapter headings are not synced into
+Scene prose. Moving or renumbering updates links without discarding edits
+in existing Working Drafts. A draft containing a Scene moved to another Book is
+blocked from sync: preserve its unsynced edits and transfer them to the destination
+Scene before compiling a fresh draft. Recompiling a Working Draft replaces that
+Book's generated draft, as in earlier versions.
+
+### Recovery
+
+Operations preflight all destinations, stage file swaps, and save original text
+in `Writing System Operation.json`. A write failure attempts rollback. If Obsidian
+closes during an operation, further project changes are blocked until recovery.
+Open a file under the affected project's `Plot` folder and run **Recover Writing
+Project**. Review the restoration preview. Recovery refuses to overwrite files
+that have been edited since the interruption. Keep the journal until recovery
+succeeds; it contains the original text and move plan.
+
+### Development and manual acceptance testing
+
+Use Node 22 or newer:
+
+```sh
+npm ci
+npm test
+npm run check
+npm run build
+```
+
+Copy `dist/main.js` to the plugin's root `main.js` after a successful build, then
+reload the plugin in Obsidian. Tests use an in-memory Vault, with real YAML parsing;
+they do not read or migrate your writing projects.
+
+In a separate test vault, check:
+
+1. A flat project still creates, reorders, compiles, and navigates paired Scenes.
+2. Migration preserves distinctive prose, custom Dashboard notes, and frontmatter.
+3. Two Books with several Parts renumber correctly after Book and Part reordering.
+4. Same-Book Scene moves update both files and clear the old Chapter assignment.
+5. Part moves preserve their content, additional files, links, and Dashboard notes.
+6. Compilation includes the expected headings and Book-wide Chapter files.
+7. Working Draft edits sync only to selected Scenes, including nested Part paths.
+8. Validation leaves file timestamps/content unchanged. A missing pair or a
+   destination collision causes Apply to fail without changing the project.
+
+Automated tests do not replace checking rendering and modal behavior in Obsidian.

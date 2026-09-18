@@ -10,33 +10,41 @@ function dashboards(plugin) {
     .sort((a,b)=>a.path.localeCompare(b.path));
 }
 
-async function chooseDashboard(plugin) {
-  const active = plugin.app.workspace.getActiveFile();
+async function chooseDashboard(plugin, options = {}) {
+  const active = Object.prototype.hasOwnProperty.call(options,'activeFile') ? options.activeFile : plugin.app.workspace.getActiveFile();
   if (active && /\/Plot\/Book \d+\/Dashboard\.md$/i.test(active.path)) return active;
   if (active) {
     const bookMatch = active.path.match(/^(.*\/Plot\/Book \d+)(?:\/.*)?$/i);
     if (bookMatch) {
       const nearby = plugin.app.vault.getAbstractFileByPath(`${bookMatch[1]}/Dashboard.md`);
       if (nearby instanceof TFile) return nearby;
+      if(options.sceneContext){new Notice('The active Book has no Dashboard.md. Restore its Dashboard before creating a Scene.');return null;}
     }
   }
-  const ds = dashboards(plugin);
+  let ds = dashboards(plugin);
+  if(active && options.sceneContext){
+    const root = require('../services/project').rootFromPath(active.path) || ds.map(d=>bookInfo(d.path).projectDir).filter(dir=>active.path.startsWith(dir+'/')).sort((a,b)=>b.length-a.length)[0];
+    if(root)ds=ds.filter(d=>bookInfo(d.path).projectDir===root);
+  }
   if (!ds.length) { new Notice('No writing Dashboard.md found.'); return null; }
-  if (ds.length === 1) return ds[0];
+  if (ds.length === 1 && !options.sceneContext) return ds[0];
   return await new Promise(resolve => {
     const app = plugin.app;
     class Pick extends Modal {
       constructor() {
         super(app);
         this.resolved = false;
+        this.dashboards = ds;
+      }
+      choose(file) {
+        if(!this.dashboards.includes(file))return;
+        this.resolved=true;this.close();resolve(file);
       }
       onOpen() {
-        this.contentEl.createEl('h2', { text:'Choose dashboard' });
-        ds.forEach(f => new Setting(this.contentEl).setName(f.path)
+        this.contentEl.createEl('h2', { text:options.sceneContext?'Choose Book':'Choose dashboard' });
+        this.dashboards.forEach(f => new Setting(this.contentEl).setName(f.path)
           .addButton(b=>b.setButtonText('Use').onClick(()=>{
-            this.resolved = true;
-            this.close();
-            resolve(f);
+            this.choose(f);
           })));
       }
       onClose(){
@@ -56,6 +64,7 @@ async function openDashboard(plugin) {
 async function reorderScenes(plugin) {
   const d = await chooseDashboard(plugin);
   if (!d) return;
+  if (await require('./part-scenes').reorder(plugin,d)) return;
   let rs;
   try { rs = parseRows(await plugin.app.vault.read(d)); }
   catch(e) { return new Notice(e.message); }
@@ -74,6 +83,15 @@ async function applyDashboard(plugin) {
 }
 
 async function applyDashboardFile(plugin, d, showNotice) {
+  const projectService = require('../services/project');
+  const project = await projectService.readProject(plugin, projectService.rootFromPath(d.path));
+  if (project) {
+    await require('./parts').requireApplied(plugin, project);
+    const plan = await require('../services/reconciliation').buildPlan(plugin, project);
+    await require('../services/transactions').execute(plugin, plan);
+    if (showNotice) new Notice('Dashboard applied.');
+    return;
+  }
   const I = bookInfo(d.path);
   const original = await plugin.app.vault.read(d);
   let rs;
@@ -96,6 +114,19 @@ async function applyDashboardFile(plugin, d, showNotice) {
     };
   });
 
+  for(const plan of plans){
+    for(const path of [plan.sceneSource,plan.manuscriptSource,plan.scenePath,plan.manuscriptPath])require('../lib/project').assertPath(path);
+    if(!plan.sceneSource.startsWith(I.bookDir+'/Scenes/')||!plan.manuscriptSource.startsWith(I.bookDir+'/Manuscript/'))throw Error('Unsafe cross-Book Scene link.');
+    const sf=plugin.app.vault.getAbstractFileByPath(plan.sceneSource),mf=plugin.app.vault.getAbstractFileByPath(plan.manuscriptSource);
+    if((sf instanceof TFile)!==(mf instanceof TFile))throw Error('Incomplete existing pair: '+plan.title);
+  }
+  const allSources=new Set(plans.flatMap(p=>[p.sceneSource,p.manuscriptSource]).map(p=>p.toLowerCase()));
+  const destinations=new Set();
+  for(const path of plans.flatMap(p=>[p.scenePath,p.manuscriptPath])){
+    const key=path.toLowerCase();if(destinations.has(key))throw Error('Duplicate destination: '+path);destinations.add(key);
+    const occupant=plugin.app.vault.getAllLoadedFiles().find(f=>f.path.toLowerCase()===key);
+    if(occupant&&(!(occupant instanceof TFile)||!allSources.has(key)))throw Error('Occupied destination: '+path);
+  }
   await renumberPairs(plugin, plans);
 
   for (let i=0; i<rs.length; i++) {

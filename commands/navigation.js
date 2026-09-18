@@ -10,6 +10,13 @@ async function openPaired(plugin, type) {
     return;
   }
 
+  const nested = active.path.match(/^(.*\/Plot\/Book \d+)\/(Scenes|Manuscript)\/(Part \d+\/[^/]+\.md)$/i);
+  if (nested) {
+    const folder = type === 'scene' ? 'Scenes' : 'Manuscript';
+    const target = plugin.app.vault.getAbstractFileByPath(nested[1] + '/' + folder + '/' + nested[3]);
+    if (!(target instanceof TFile)) return new Notice('Paired file is missing.');
+    await plugin.app.workspace.getLeaf(false).openFile(target); return;
+  }
   const targetFolder = type === 'scene' ? 'Scenes' : 'Manuscript';
   const sourcePattern = type === 'scene' ? /\/Manuscript\/([^/]+)\.md$/i : /\/Scenes\/([^/]+)\.md$/i;
   const match = active.path.match(sourcePattern);
@@ -40,6 +47,11 @@ async function validateBook(plugin) {
   if (!dashboard) return;
 
   const info = bookInfo(dashboard.path);
+  const project = await require('../services/project').readProject(plugin,info.projectDir);
+  if (project) {
+    const lines = await require('../lib/validation').validateProject(plugin,info.projectDir);
+    new ValidateModal(plugin.app,lines,'Validate Book (including project ownership)').open(); return;
+  }
   let rows;
   try {
     rows = parseRows(await plugin.app.vault.read(dashboard));
