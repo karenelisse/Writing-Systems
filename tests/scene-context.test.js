@@ -113,3 +113,27 @@ test('the active Dashboard cursor preselects its Part section', async t => {
   assert.ok(modal instanceof SceneModal);
   assert.equal(modal.v.partId, book.parts[1].id);
 });
+
+test('New Scene identifies a Master Dashboard with broken managed markers', async t => {
+  const fx = await setup(t);
+  const masterPath = fx.root + '/Plot/Master Dashboard.md';
+  const master = fx.vault.getAbstractFileByPath(masterPath);
+  await fx.vault.modify(master, fx.texts.get(masterPath).replace('<!-- WRITING-SYSTEM:PROJECT:START -->', ''));
+  fx.activate(fx.books[0].dir + '/Dashboard.md');
+  await assert.rejects(
+    newScene(fx.plugin),
+    /Invalid Master Dashboard .*Missing or duplicate managed markers/
+  );
+});
+
+test('New Scene identifies a Book Dashboard with broken managed markers', async t => {
+  const fx = await setup(t);
+  const path = fx.books[0].dir + '/Dashboard.md';
+  const dashboard = fx.vault.getAbstractFileByPath(path);
+  await fx.vault.modify(dashboard, fx.texts.get(path).replace('<!-- WRITING-SYSTEM:SCENES:START -->', ''));
+  fx.activate(path);
+  await assert.rejects(
+    newScene(fx.plugin),
+    /Invalid Book Dashboard .*Missing or duplicate managed markers/
+  );
+});
