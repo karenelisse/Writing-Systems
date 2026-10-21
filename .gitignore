@@ -1,3 +1,10 @@
 dist/
 
 node_modules/
+
+# Plugin-local settings and credentials (does not protect other vault repositories)
+data.json
+.env
+.env.*
+github.local.json
+github.credentials.json

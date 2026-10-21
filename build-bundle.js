@@ -5,7 +5,7 @@ const root = __dirname;
 const output = path.join(root, 'dist', 'main.js');
 const entries = [
   'main.source.js',
-  ...['commands', 'lib', 'modals', 'services'].flatMap(dir =>
+  ...['commands', 'lib', 'modals', 'services', 'settings'].flatMap(dir =>
     fs.readdirSync(path.join(root, dir))
       .filter(name => name.endsWith('.js'))
       .map(name => `${dir}/${name}`)

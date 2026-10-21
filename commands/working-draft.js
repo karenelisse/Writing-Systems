@@ -68,6 +68,12 @@ async function workingDraftToManuscript(plugin) {
     const updated = selected.length;
     const missingText = missing.length ? ` ${missing.length} linked file${missing.length === 1 ? ' was' : 's were'} missing.` : '';
     new Notice(`Updated ${updated} Manuscript file${updated === 1 ? '' : 's'} from Working Draft.${missingText}`);
+    const snapshots = require('../services/snapshot-export');
+    await snapshots.afterWriting(plugin, () => snapshots.assembleManuscript(plugin, bookDir + '/Dashboard.md'));
+    await snapshots.afterWriting(plugin, {
+      dashboardPath: bookDir + '/Dashboard.md', type: 'working-draft',
+      content: draftContent, sceneCount: sections.filter(section => section.prose.trim()).length
+    });
   })).open();
 }
 

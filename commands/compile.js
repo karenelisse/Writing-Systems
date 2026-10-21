@@ -120,6 +120,7 @@ async function compileBook(plugin, copyToClipboard) {
 
   f = plugin.app.vault.getAbstractFileByPath(outPath);
   if (f instanceof TFile) await plugin.app.workspace.getLeaf(false).openFile(f);
+  await require('../services/snapshot-export').afterWriting(plugin, { dashboardPath: d.path, type: 'manuscript', content: full, sceneCount: compiled, missing });
 }
 
 async function compileWorkingDraft(plugin) {
@@ -200,6 +201,7 @@ async function compileWorkingDraft(plugin) {
 
     output = plugin.app.vault.getAbstractFileByPath(outPath);
     if (output instanceof TFile) await plugin.app.workspace.getLeaf(false).openFile(output);
+    await require('../services/snapshot-export').afterWriting(plugin, { dashboardPath: d.path, type: 'working-draft', content: full, sceneCount: compiled, missing });
   } catch (error) {
     console.error('Writing System working-draft compile failed', error);
     new Notice(`Working draft compile failed: ${error?.message || String(error)}`);

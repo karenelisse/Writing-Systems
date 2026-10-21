@@ -3,7 +3,10 @@ const { registerCommands } = require('./commands');
 const { openDashboard } = require('./commands/dashboard');
 
 module.exports = class WritingSystem extends Plugin {
+  onunload() { this.githubSessionToken = ''; }
+
   async onload() {
+    await require('./settings/github').initialize(this);
     registerCommands(this);
     this.app.workspace.onLayoutReady(()=>{
       const journals=this.app.vault.getFiles().filter(f=>f.path.endsWith('/Writing System Operation.json'));

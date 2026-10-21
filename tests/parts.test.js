@@ -209,3 +209,8 @@ test('cleanup leaves an obsolete folder containing a newly arrived file intact',
  const modify=fx.vault.modify;fx.vault.modify=async(f,text)=>{await modify(f,text);if(f.path===root+'/Writing System Operation.json'&&JSON.parse(text).status==='complete')await fx.vault.create(stale+'/New.txt','keep');};
  await execute(fx.plugin,plan);assert.equal(fx.texts.get(stale+'/New.txt'),'keep');
 });
+
+test('Validate Project reports obsolete empty Part folders without deleting them',async()=>{
+ const fx=await migrate(),stale=root+'/Plot/Book 2/Scenes/Part 99';await fx.vault.createFolder(stale);const writes=fx.writes;
+ const issues=await validateProject(fx.plugin,root);assert.ok(issues.some(i=>!i.ok&&i.text.includes(stale)&&i.text.includes('Obsolete empty folder')));assert.equal(fx.writes,writes);assert.ok(fx.entries.has(stale));
+});
