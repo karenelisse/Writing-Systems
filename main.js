@@ -686,7 +686,21 @@ const { ReorderModal }=require('../modals/reorder');
 const { DeleteSceneModal }=require('../modals/delete-scene');
 const { Choices }=require('../modals/parts');
 const { cleanTitle,extractLinks }=require('../lib/dashboard');
-async function get(plugin,d){const p=await readProject(plugin,rootFromPath(d.path));if(!p)return null;await requireApplied(plugin,p);const book=layout(p.model,p.root).find(b=>b.dir+'/Dashboard.md'===d.path);if(!book)throw Error('Book is not in the Master Dashboard.');const text=await plugin.app.vault.read(d);return {p,book,text,rows:parseBook(text,p.model.partsEnabled).rows};}
+async function get(plugin,d){
+ const root=rootFromPath(d.path);
+ let p;
+ try{p=await readProject(plugin,root);}
+ catch(e){throw Error(`Invalid Master Dashboard (${root}/Plot/Master Dashboard.md): ${e.message}`);}
+ if(!p)return null;
+ await requireApplied(plugin,p);
+ const book=layout(p.model,p.root).find(b=>b.dir+'/Dashboard.md'===d.path);
+ if(!book)throw Error('Book is not in the Master Dashboard.');
+ const text=await plugin.app.vault.read(d);
+ let rows;
+ try{rows=parseBook(text,p.model.partsEnabled).rows;}
+ catch(e){throw Error(`Invalid Book Dashboard (${d.path}): ${e.message}`);}
+ return {p,book,text,rows};
+}
 async function create(plugin,d,options={}){
  const ctx=await get(plugin,d);if(!ctx)return false;
  const {p,book,rows}=ctx;
