@@ -4,7 +4,7 @@ class TFile { constructor(path){this.path=path;this.extension=path.split('.').po
 class Folder {constructor(path){this.path=path;this.children=[];}}
 class Notice {constructor(message){Notice.messages.push(message);}} Notice.messages=[];
 class Modal {constructor(app){this.app=app;}open(){}close(){}}
-const obsidian={TFile,Notice,Modal,Setting:class{},Plugin:class{},normalizePath:p=>p.replace(/\\/g,'/'),parseYaml:YAML.parse,stringifyYaml:YAML.stringify};
+const obsidian={TFile,Notice,Modal,Setting:class{},Plugin:class{async loadData(){return this.data||null;}async saveData(data){this.data=data;}addSettingTab(tab){this.settingTab=tab;}},PluginSettingTab:class{constructor(app,plugin){this.app=app;this.plugin=plugin;}},normalizePath:p=>p.replace(/\\/g,'/'),parseYaml:YAML.parse,stringifyYaml:value=>YAML.stringify(value,null,{nullStr:"",lineWidth:0,aliasDuplicateObjects:false})};
 const original=Module._load;Module._load=function(name,...args){return name==='obsidian'?obsidian:original.call(this,name,...args);};
 function fixture(initial={}){
  const entries=new Map(),texts=new Map();let writes=0,failAt=0;

@@ -9,6 +9,7 @@ const { workingDraftToManuscript } = require('./working-draft');
 const { openPaired, validateBook } = require('./navigation');
 
 function registerCommands(plugin) {
+  plugin.addCommand({ id: 'push-snapshot-github', name: 'Push Snapshot to GitHub', callback: () => require('./snapshot').pushSnapshot(plugin) });
   const parts = require('./parts');
   for (const [id, name, fn] of [
     ['open-master-dashboard','Open Master Dashboard',parts.openMaster],

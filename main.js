@@ -9,7 +9,10 @@ const { registerCommands } = require('./commands');
 const { openDashboard } = require('./commands/dashboard');
 
 module.exports = class WritingSystem extends Plugin {
+  onunload() { this.githubSessionToken = ''; }
+
   async onload() {
+    await require('./settings/github').initialize(this);
     registerCommands(this);
     this.app.workspace.onLayoutReady(()=>{
       const journals=this.app.vault.getFiles().filter(f=>f.path.endsWith('/Writing System Operation.json'));
@@ -143,6 +146,7 @@ async function compileBook(plugin, copyToClipboard) {
 
   f = plugin.app.vault.getAbstractFileByPath(outPath);
   if (f instanceof TFile) await plugin.app.workspace.getLeaf(false).openFile(f);
+  await require('../services/snapshot-export').afterWriting(plugin, { dashboardPath: d.path, type: 'manuscript', content: full, sceneCount: compiled, missing });
 }
 
 async function compileWorkingDraft(plugin) {
@@ -223,6 +227,7 @@ async function compileWorkingDraft(plugin) {
 
     output = plugin.app.vault.getAbstractFileByPath(outPath);
     if (output instanceof TFile) await plugin.app.workspace.getLeaf(false).openFile(output);
+    await require('../services/snapshot-export').afterWriting(plugin, { dashboardPath: d.path, type: 'working-draft', content: full, sceneCount: compiled, missing });
   } catch (error) {
     console.error('Writing System working-draft compile failed', error);
     new Notice(`Working draft compile failed: ${error?.message || String(error)}`);
@@ -530,6 +535,7 @@ const { workingDraftToManuscript } = require('./working-draft');
 const { openPaired, validateBook } = require('./navigation');
 
 function registerCommands(plugin) {
+  plugin.addCommand({ id: 'push-snapshot-github', name: 'Push Snapshot to GitHub', callback: () => require('./snapshot').pushSnapshot(plugin) });
   const parts = require('./parts');
   for (const [id, name, fn] of [
     ['open-master-dashboard','Open Master Dashboard',parts.openMaster],
@@ -1210,6 +1216,19 @@ module.exports = {
 };
 
 },
+"commands/snapshot.js": function (require, module, exports) {
+const { Notice, TFile } = require('obsidian');
+async function pushSnapshot(plugin) {
+  try {
+    const file = plugin.app.workspace.getActiveFile();
+    if (!(file instanceof TFile)) throw Error('Open a snapshot in Writing/compiled/ first.');
+    const result = await require('../services/github-sync').pushSnapshot(plugin, file.path);
+    new Notice(result.changed ? 'Snapshot pushed to GitHub.' : 'GitHub snapshot is already up to date.');
+  } catch (error) { new Notice(error.message); }
+}
+module.exports = { pushSnapshot };
+
+},
 "commands/working-draft.js": function (require, module, exports) {
 const { Notice, TFile, normalizePath } = require('obsidian');
 const { linkedFilePath } = require('../lib/dashboard');
@@ -1281,6 +1300,12 @@ async function workingDraftToManuscript(plugin) {
     const updated = selected.length;
     const missingText = missing.length ? ` ${missing.length} linked file${missing.length === 1 ? ' was' : 's were'} missing.` : '';
     new Notice(`Updated ${updated} Manuscript file${updated === 1 ? '' : 's'} from Working Draft.${missingText}`);
+    const snapshots = require('../services/snapshot-export');
+    await snapshots.afterWriting(plugin, () => snapshots.assembleManuscript(plugin, bookDir + '/Dashboard.md'));
+    await snapshots.afterWriting(plugin, {
+      dashboardPath: bookDir + '/Dashboard.md', type: 'working-draft',
+      content: draftContent, sceneCount: sections.filter(section => section.prose.trim()).length
+    });
   })).open();
 }
 
@@ -1943,7 +1968,7 @@ async function validateProject(plugin,root) {
    }
   }
  }
- try{const plan=await buildPlan(plugin,p);for(const op of plan.files)if(!op.target.endsWith('/Writing System State.json'))report((op.source?'Reconciliation needed: ':'Missing expected file: ')+op.target);}catch(e){report(e.message);}
+ try{const plan=await buildPlan(plugin,p);for(const path of plan.obsoleteFolders || [])if(!plan.folders.includes(path))report('Obsolete empty folder; Apply Master Dashboard to remove: '+path);for(const op of plan.files)if(!op.target.endsWith('/Writing System State.json'))report((op.source?'Reconciliation needed: ':'Missing expected file: ')+op.target);}catch(e){report(e.message);}
  if(!issues.length)issues.push({ok:true,text:'Project, Dashboards, Part folders, paired files, links, and frontmatter agree.'});
  return issues;
 }
@@ -2555,6 +2580,82 @@ async function folderIsEmpty(plugin, folder) {
 module.exports = { ensureFolder, createMissing, folderIsEmpty };
 
 },
+"services/github-sync.js": function (require, module, exports) {
+const { TFile, requestUrl } = require('obsidian');
+const { Buffer } = require('buffer');
+const { githubSettings, authentication } = require('../settings/github');
+const { validatePath, validateContent } = require('./snapshot-export');
+const queues = new WeakMap();
+function pushSnapshot(plugin, path, request = requestUrl) {
+  const previous = queues.get(plugin) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => upload(plugin, path, request));
+  queues.set(plugin, next);
+  return next;
+}
+async function upload(plugin, path, request) {
+  const config = githubSettings(plugin);
+  if (!config.enabled) throw Error('Enable GitHub integration first.');
+  const filename = validatePath(path);
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9_.-]+$/.test(config.repository) || /\/(?:\.|\.\.)$/.test(config.repository)) throw Error('Configure a repository as owner/repository.');
+  if (!config.branch || /[\x00-\x20~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$|\.lock(?:\/|$)/.test(config.branch) || config.branch.startsWith('/') || config.branch.startsWith('-')) throw Error('Configure a valid GitHub branch.');
+  const token = await authentication(plugin, config);
+  const base = 'https://api.github.com/repos/' + config.repository;
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  async function api(url, method = 'GET', body, accept) {
+    try {
+      return await request({ url, method, headers: { ...headers, ...(accept ? { Accept: accept } : {}) },
+        ...(body ? { body: JSON.stringify(body), contentType: 'application/json' } : {}), throw: false });
+    } catch { throw Error('Network request failed. Check your connection and try again.'); }
+  }
+  function requireSuccess(response, action) {
+    if (response.status >= 200 && response.status < 300) return;
+    if (response.status === 409 || response.status === 422) throw Error('GitHub conflict or rejected update. Review the remote file and branch before retrying.');
+    if (response.status === 401 || response.status === 403) throw Error('GitHub access denied. Check token permissions and repository access.');
+    if (response.status === 404) throw Error('GitHub repository or branch is unavailable. Check configuration and token access.');
+    throw Error(action + ' failed (HTTP ' + response.status + ').');
+  }
+  const repository = await api(base);
+  requireSuccess(repository, 'Repository check');
+  if (repository.json?.private !== true) throw Error('Uploads require a private GitHub repository.');
+  // Validate visibility before reading even the selected local snapshot.
+  const file = plugin.app.vault.getAbstractFileByPath(path);
+  if (!(file instanceof TFile)) throw Error('Selected snapshot does not exist.');
+  const content = validateContent(await plugin.app.vault.read(file));
+  const endpoint = base + '/contents/' + encodeURIComponent(filename);
+  const remote = await api(endpoint + '?ref=' + encodeURIComponent(config.branch));
+  let sha;
+  if (remote.status === 200) {
+    const object = remote.json;
+    if (object?.type !== 'file' || typeof object.sha !== 'string' || object.submodule_git_url || object.target) throw Error('Remote snapshot path is not a regular file.');
+    sha = object.sha;
+    let remoteContent;
+    if (object.encoding === 'base64' && typeof object.content === 'string') remoteContent = Buffer.from(object.content.replace(/\s/g, ''), 'base64').toString('utf8');
+    else {
+      const raw = await api(endpoint + '?ref=' + encodeURIComponent(config.branch), 'GET', undefined, 'application/vnd.github.raw+json');
+      requireSuccess(raw, 'Remote content read');
+      remoteContent = raw.text;
+      // Avoid uploading against a SHA obtained before the raw content request changed.
+      const verify = await api(endpoint + '?ref=' + encodeURIComponent(config.branch));
+      requireSuccess(verify, 'Remote version check');
+      if (verify.json?.sha !== sha) throw Error('GitHub file changed during comparison. Review it before retrying.');
+    }
+    if (remoteContent === content) return { changed: false, path };
+  } else if (remote.status === 404) {
+    // Distinguish a missing file from a nonexistent branch; never create branches.
+    const branch = await api(base + '/branches/' + encodeURIComponent(config.branch));
+    requireSuccess(branch, 'Branch check');
+  } else requireSuccess(remote, 'Remote content read');
+  if (file.path !== path || await plugin.app.vault.read(file) !== content) throw Error('Local snapshot changed during upload. Try again.');
+  const result = await api(endpoint, 'PUT', {
+    message: 'Update ' + filename, content: Buffer.from(content, 'utf8').toString('base64'),
+    branch: config.branch, ...(sha ? { sha } : {})
+  });
+  requireSuccess(result, 'Snapshot upload');
+  return { changed: true, path };
+}
+module.exports = { pushSnapshot };
+
+},
 "services/project.js": function (require, module, exports) {
 const { TFile, parseYaml, stringifyYaml } = require('obsidian');
 const { parseMaster, layout, id, renderMaster } = require('../lib/project');
@@ -2921,6 +3022,143 @@ async function recover(plugin,inspection){
 module.exports={inspectRecovery,recover};
 
 },
+"services/snapshot-export.js": function (require, module, exports) {
+const { TFile, Notice } = require('obsidian');
+const { bookInfo, parseWiki, basename, linkedFilePath, workingTitleFromDashboard } = require('../lib/dashboard');
+const { stripManuscript } = require('../lib/templates');
+const { githubSettings, saveSettings } = require('../settings/github');
+const DIRECTORY = 'Writing/compiled';
+const queues = new WeakMap();
+function serial(plugin, work) {
+  const previous = queues.get(plugin) || Promise.resolve();
+  const next = previous.catch(() => {}).then(work);
+  queues.set(plugin, next);
+  return next;
+}
+function slug(value) {
+  return String(value).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[’']/g, '').replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .trim().replace(/[\s-]+/g, '-').slice(0, 65).replace(/-+$/, '') || 'untitled';
+}
+function snapshotName(project, book, type) {
+  if (!['manuscript', 'working-draft'].includes(type)) throw Error('Invalid snapshot type.');
+  return slug(project) + '-' + slug(book) + '-' + type + '.md';
+}
+function validatePath(path) {
+  if (typeof path !== 'string' || !/^Writing\/compiled\/[^/\\]+\.md$/.test(path)) throw Error('Open a snapshot directly inside Writing/compiled/ first.');
+  const name = path.slice(DIRECTORY.length + 1);
+  if (!/^[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*-(?:manuscript|working-draft)(?:-[2-9]\d*|-[1-9]\d+)?\.md$/u.test(name)) throw Error('Select a manuscript or Working Draft snapshot, not README or another file.');
+  require('../lib/project').assertPath(path);
+  return name;
+}
+function cleanProse(content) {
+  return String(content || '').replace(/\r\n/g, '\n')
+    .replace(/^---\s*\n[\s\S]*?\n---(?:\n|$)/, '')
+    .replace(/<!--\s*WRITING-SYSTEM:[\s\S]*?-->/g, '')
+    .replace(/!?\[\[([^\]\n]+)\]\]/g, (_, target) => {
+      const pieces = target.split('|');
+      return pieces.length > 1 ? pieces.slice(1).join('|') : pieces[0].split('#')[0].split('/').pop().replace(/\.md$/i, '');
+    }).trim() + '\n';
+}
+function validateContent(content, sceneCount) {
+  if (typeof content !== 'string' || !content.trim() || content.includes('\u0000') || /<!--\s*WRITING-SYSTEM:|\[\[/.test(content)) throw Error('Snapshot content is empty or invalid.');
+  const prose = content.replace(/^# [^\n]*\n+(?:\*[^\n]*\*\n+)?/, '').replace(/<!--[\s\S]*?-->/g, '').split('\n').filter(line => !/^\s*(?:#{1,6}\s|[-*_]{3,}\s*$)/.test(line)).join('\n').replace(/^[\s*_]+|[\s*_]+$/g, '');
+  if (sceneCount === 0 || !prose.trim()) throw Error('Snapshot has no manuscript prose; the previous snapshot was kept.');
+  return content;
+}
+async function identity(plugin, dashboardPath, type) {
+  const info = bookInfo(dashboardPath);
+  const root = require('./project').rootFromPath(dashboardPath);
+  const project = await require('./project').readProject(plugin, root);
+  const book = project && require('../lib/project').layout(project.model, root).find(b => b.dir === info.bookDir);
+  return { info, key: JSON.stringify([project?.model.id || info.projectDir, book?.id || info.bookDir, type]) };
+}
+async function writeSnapshot(plugin, { dashboardPath, type, content, sceneCount, missing = 0 }) {
+  if (!githubSettings(plugin).enabled) return null;
+  if (missing) throw Error('Snapshot skipped because manuscript scenes are missing; the previous snapshot was kept.');
+  if (typeof content !== 'string') throw Error('Snapshot content must be Markdown text.');
+  const clean = validateContent(cleanProse(content), sceneCount);
+  const { info, key } = await identity(plugin, dashboardPath, type);
+  const settings = plugin.settings;
+  const names = settings.snapshotNames || (settings.snapshotNames = {});
+  let path = names[key];
+  if (path) validatePath(path);
+  const vault = plugin.app.vault;
+  const occupant = path && vault.getAbstractFileByPath(path);
+  if (path && ((occupant && !(occupant instanceof TFile)) || Object.entries(names).some(([owner, other]) => owner !== key && other.toLowerCase() === path.toLowerCase()))) path = null;
+  if (!path) {
+    const base = snapshotName(info.projectName, info.bookName, type);
+    let name = base, suffix = 1;
+    const occupied = candidate => Object.values(names).some(p => p.toLowerCase() === candidate.toLowerCase()) ||
+      vault.getAllLoadedFiles().some(f => f.path.normalize('NFC').toLowerCase() === candidate.normalize('NFC').toLowerCase());
+    while (occupied(DIRECTORY + '/' + name)) name = base.replace(/\.md$/, '-' + (++suffix) + '.md');
+    path = DIRECTORY + '/' + name;
+    // Persist ownership before writing: a failed write can safely reuse this reservation.
+    names[key] = path;
+    try { await saveSettings(plugin); } catch (error) { delete names[key]; throw error; }
+    if (suffix > 1) new Notice('Snapshot name already exists. Saving as ' + name + '.');
+  }
+  if (Object.entries(names).some(([owner, other]) => owner !== key && other.toLowerCase() === path.toLowerCase())) throw Error('Snapshot filename ownership is invalid.');
+  const file = vault.getAbstractFileByPath(path);
+  if (file && !(file instanceof TFile)) throw Error('A folder occupies the snapshot path.');
+  if (file && await vault.read(file) === clean) return { path, changed: false };
+  await require('./files').ensureFolder(plugin, DIRECTORY);
+  if (file) await vault.modify(file, clean);
+  else await vault.create(path, clean);
+  return { path, changed: true };
+}
+// Read-only assembly: never invoke the compile command or create chapter output.
+async function assembleManuscript(plugin, dashboardPath) {
+  const vault = plugin.app.vault;
+  const dashboard = vault.getAbstractFileByPath(dashboardPath);
+  if (!(dashboard instanceof TFile)) throw Error('Book Dashboard is missing.');
+  const text = await vault.read(dashboard);
+  const info = bookInfo(dashboardPath);
+  const rows = await require('../lib/compilation').compilationRows(plugin, dashboard, text);
+  const hasChapter = rows.some(r => String(r.chapter || '').trim());
+  let part = null, chapter = null, sceneCount = 0, missing = 0;
+  const body = [];
+  for (const row of rows) {
+    const wiki = parseWiki(row.sceneLink);
+    const title = wiki.label || basename(wiki.path);
+    if (!title) throw Error('Dashboard contains a Scene without a title.');
+    const path = linkedFilePath(info.bookDir, row.manuscriptLink, 'Manuscript', title);
+    require('../lib/project').assertPath(path);
+    if (!path.startsWith(info.bookDir + '/Manuscript/')) throw Error('Manuscript path is outside this Book.');
+    const file = vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) { missing++; continue; }
+    const prose = stripManuscript(await vault.read(file), title);
+    if (!prose) continue;
+    if (row.partHeading && row.partHeading !== part) { body.push(row.partHeading); part = row.partHeading; chapter = null; }
+    const ch = String(row.chapter || '').trim();
+    if (hasChapter && ch !== chapter) { body.push(ch ? '# Chapter ' + ch : '# Unassigned'); chapter = ch; }
+    body.push(prose);
+    sceneCount++;
+  }
+  const title = workingTitleFromDashboard(text, info);
+  const heading = '# ' + title + (info.projectName && info.projectName !== title ? '\n\n*' + info.projectName + '*' : '');
+  return { dashboardPath, type: 'manuscript', content: heading + '\n\n' + body.join('\n\n') + '\n', sceneCount, missing };
+}
+async function afterWriting(plugin, data) {
+  if (!githubSettings(plugin).enabled) return;
+  return serial(plugin, async () => {
+    let snapshot;
+    try {
+      if (!githubSettings(plugin).enabled) return;
+      const input = typeof data === 'function' ? await data() : data;
+      snapshot = await writeSnapshot(plugin, input);
+    } catch {
+      new Notice('Snapshot could not be saved. Your writing operation succeeded. Check snapshot paths, missing scenes, available prose and disk access.');
+      return;
+    }
+    if (!snapshot || !githubSettings(plugin).autoPush) return;
+    try { await require('./github-sync').pushSnapshot(plugin, snapshot.path); }
+    catch (error) { new Notice('GitHub snapshot upload failed: ' + error.message + ' Local snapshot is saved.'); }
+  });
+}
+module.exports = { DIRECTORY, slug, snapshotName, validatePath, cleanProse, validateContent, identity, writeSnapshot, assembleManuscript, afterWriting };
+
+},
 "services/transactions.js": function (require, module, exports) {
 const { TFile } = require('obsidian');
 const { assertPath, id } = require('../lib/project');
@@ -3069,6 +3307,56 @@ async function saveDraft(plugin, draftPath, content, metadata, checks = []) {
 }
 
 module.exports = { readDraftMetadata, saveDraft };
+
+},
+"settings/github.js": function (require, module, exports) {
+const { Notice } = require('obsidian');
+const DEFAULTS = { enabled: false, autoPush: true, repository: '', branch: 'main', secretName: '' };
+function githubSettings(plugin) { return { ...DEFAULTS, ...(plugin.settings?.github || {}) }; }
+async function saveSettings(plugin) { await plugin.saveData(plugin.settings); }
+async function initialize(plugin) {
+  plugin.settings = (await plugin.loadData()) || {};
+  plugin.settings.github = githubSettings(plugin);
+  plugin.settings.snapshotNames = plugin.settings.snapshotNames || {};
+  const { PluginSettingTab, Setting, SecretComponent } = require('obsidian');
+  class GitHubTab extends PluginSettingTab {
+    display() {
+      const el = this.containerEl;
+      el.empty();
+      el.createEl('h2', { text: 'GitHub manuscript snapshots' });
+      el.createEl('p', { text: 'Snapshots are saved to Writing/compiled/. Only the relevant snapshot is uploaded; existing compiled files and Working Drafts stay in place.' });
+      const change = async (key, value) => {
+        plugin.settings.github[key] = value;
+        try { await saveSettings(plugin); } catch { new Notice('Writing System could not save GitHub settings.'); }
+      };
+      const config = githubSettings(plugin);
+      new Setting(el).setName('Enable GitHub integration').addToggle(c => c.setValue(config.enabled).onChange(v => change('enabled', v)));
+      new Setting(el).setName('Automatically push snapshots').setDesc('Turn off to save snapshots locally without uploading.').addToggle(c => c.setValue(config.autoPush).onChange(v => change('autoPush', v)));
+      new Setting(el).setName('Repository').setDesc('Private repository in owner/repository format.').addText(c => c.setPlaceholder('owner/repository').setValue(config.repository).onChange(v => change('repository', v.trim())));
+      new Setting(el).setName('Branch').addText(c => c.setValue(config.branch).onChange(v => change('branch', v.trim())));
+      const auth = new Setting(el).setName('GitHub authentication');
+      if (plugin.app.secretStorage && SecretComponent && typeof auth.addComponent === 'function') {
+        auth.setDesc('Select or create a secret containing a GitHub token with Contents read/write access to your manuscript repository.')
+          .addComponent(container => new SecretComponent(plugin.app, container).setValue(config.secretName).onChange(v => change('secretName', v)));
+      } else {
+        auth.setDesc('This Obsidian version has no secret picker. The token is held only until the plugin reloads; it is never saved to plugin settings.')
+          .addText(c => { c.inputEl.type = 'password'; c.inputEl.autocomplete = 'off'; c.setPlaceholder('Session-only token').onChange(v => { plugin.githubSessionToken = v.trim(); }); });
+      }
+    }
+  }
+  plugin.addSettingTab(new GitHubTab(plugin.app, plugin));
+}
+async function authentication(plugin, config) {
+  let token;
+  try {
+    token = config.secretName && plugin.app.secretStorage
+      ? await plugin.app.secretStorage.getSecret(config.secretName)
+      : plugin.githubSessionToken;
+  } catch { throw Error('Could not read GitHub authentication. Check your secret in Writing System settings.'); }
+  if (!token || typeof token !== 'string' || !token.trim()) throw Error('Configure GitHub authentication in Writing System settings.');
+  return token.trim();
+}
+module.exports = { DEFAULTS, githubSettings, initialize, saveSettings, authentication };
 
 }
 };
