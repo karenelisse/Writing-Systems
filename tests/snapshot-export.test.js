@@ -39,6 +39,52 @@ test('collisions save numbered flat snapshots, preserve README and reuse persist
   assert.deepEqual(await snapshots.writeSnapshot(fx.plugin, input()), { path: first.path, changed: false });
   assert.equal(fx.writes, before);
 });
+test('repeated changed compiles and a second device reuse the same remote paths', async () => {
+  const fx = bookFixture();
+  await require('../commands/compile').compile(fx.plugin, false);
+  const path = 'Writing/compiled/cafe-story-book-1-manuscript.md';
+  const manuscript = fx.vault.getAbstractFileByPath(dir + '/Manuscript/A.md');
+  await fx.vault.modify(manuscript, fx.texts.get(manuscript.path).replace('Original A.', 'Revised A.'));
+  await require('../commands/compile').compile(fx.plugin, false);
+  assert.match(fx.texts.get(path), /Revised A/);
+  const second = setup(Object.fromEntries(fx.texts));
+  const other = second.vault.getAbstractFileByPath(manuscript.path);
+  await second.vault.modify(other, second.texts.get(other.path).replace('Revised A.', 'Device two edit.'));
+  await require('../commands/compile').compileBook(second.plugin, false, second.vault.getAbstractFileByPath(dir + '/Dashboard.md'));
+  assert.match(second.texts.get(path), /Device two edit/);
+  assert.deepEqual([...second.texts.keys()].filter(p => /^Writing\/compiled\/[^/]+\.md$/.test(p)), [path]);
+  assert.equal(Object.values(second.plugin.settings.snapshotNames)[0], path);
+});
+
+test('legacy canonical snapshot is adopted only with matching content and an unambiguous Dashboard', async () => {
+  const path = 'Writing/compiled/cafe-story-book-1-manuscript.md';
+  const fx = bookFixture();
+  const data = await snapshots.assembleManuscript(fx.plugin, dir + '/Dashboard.md');
+  await require('../services/files').ensureFolder(fx.plugin, 'Writing/compiled');
+  await fx.vault.create(path, snapshots.cleanProse(data.content));
+  assert.equal((await snapshots.writeSnapshot(fx.plugin, data)).path, path);
+  assert.equal((await snapshots.writeSnapshot(fx.plugin, { ...data, content: '# Changed\n\nNew prose.' })).path, path);
+  const ambiguous = bookFixture();
+  await require('../services/files').ensureFolder(ambiguous.plugin, 'Writing/compiled');
+  await ambiguous.vault.create(path, snapshots.cleanProse(data.content));
+  const otherDashboard = 'Writing/Cafe Story/Plot/Book 1/Dashboard.md';
+  await require('../services/files').ensureFolder(ambiguous.plugin, 'Writing/Cafe Story/Plot/Book 1');
+  await ambiguous.vault.create(otherDashboard, 'Other Book');
+  assert.notEqual((await snapshots.writeSnapshot(ambiguous.plugin, data)).path, path);
+  assert.equal(ambiguous.texts.get(path), snapshots.cleanProse(data.content));
+});
+
+test('second device preserves numbered ownership and isolates genuine collisions', async () => {
+  const fx = setup();
+  const first = await snapshots.writeSnapshot(fx.plugin, input());
+  const other = input({ dashboardPath: 'Writing/Cafe Story/Plot/Book 1/Dashboard.md', content: '# Other\n\nOther prose.' });
+  const collision = await snapshots.writeSnapshot(fx.plugin, other);
+  assert.notEqual(first.path, collision.path);
+  const second = setup(Object.fromEntries(fx.texts));
+  assert.equal((await snapshots.writeSnapshot(second.plugin, { ...other, content: '# Other\n\nRevised other prose.' })).path, collision.path);
+  assert.equal(second.texts.get(first.path), fx.texts.get(first.path));
+});
+
 test('books and output types remain isolated', async () => {
   const fx = setup();
   for (const dashboardPath of [dir + '/Dashboard.md', 'Writing/Other/Plot/Book 1/Dashboard.md', 'Writing/Café Story/Plot/Book 2/Dashboard.md']) {
@@ -47,7 +93,7 @@ test('books and output types remain isolated', async () => {
   const before = new Map(fx.texts);
   const target = await snapshots.writeSnapshot(fx.plugin, input({ content: '# Changed\n\nRevised prose.' }));
   for (const [path, text] of before) if (path !== target.path) assert.equal(fx.texts.get(path), text);
-  assert.equal(fx.texts.size, 6);
+  assert.equal([...fx.texts.keys()].filter(p => /^Writing\/compiled\/[^/]+\.md$/.test(p)).length, 6);
 });
 test('clean copy has normal headings, Unicode prose, no frontmatter, wiki links or generated comments', () => {
   const source = '---\nsecret: none\n---\n# Book\n\n# Chapter 1\n\n<!-- WRITING-SYSTEM:DRAFT-SCENE:abc -->\n### [[Manuscript/A|Opening]]\n\n“Éowyn — 你好 🌙.” [[Characters/A|Alice]]\n<!-- WRITING-SYSTEM:DRAFT-END -->';
@@ -103,6 +149,10 @@ test('partial Working Draft sync exports entire saved manuscript, excluding unse
   assert.match(snapshot, /Original B\./);
   assert.match(snapshot, /Original C\./);
   assert.doesNotMatch(snapshot, /Unselected B edit/);
+  const compiled = fx.texts.get(dir + '/Compiled/Café Story.md');
+  assert.equal(compiled, snapshot);
+  assert.match(fx.texts.get(dir + '/Manuscript/A.md'), /Selected A edit/);
+  assert.match(fx.texts.get(dir + '/Manuscript/B.md'), /Original B/);
   const draftSnapshot = fx.texts.get('Writing/compiled/cafe-story-book-1-working-draft.md');
   assert.match(draftSnapshot, /Selected A edit\./);
   assert.match(draftSnapshot, /Unselected B edit\./);
@@ -142,12 +192,13 @@ for (const operation of ['manuscript', 'clipboard', 'working-draft']) test(opera
   assert.deepEqual(existing(enabled.texts), existing(baseline.texts));
   const snapshot = [...enabled.texts].find(([path]) => path.startsWith('Writing/compiled/'));
   assert.ok(snapshot, 'enabled compilation creates its snapshot');
-  assert.equal([...enabled.texts.keys()].filter(p => p.startsWith('Writing/compiled/')).length, 1);
+  assert.equal([...enabled.texts.keys()].filter(p => /^Writing\/compiled\/[^/]+\.md$/.test(p)).length, 1);
   assert.doesNotMatch(snapshot[1], /\[\[|WRITING-SYSTEM/);
   if (operation === 'clipboard') { assert.equal(clipboard.length, 2); assert.equal(clipboard[0], clipboard[1]); }
 });
 test('cancel, zero selection and failed Working Draft transactions never produce manuscript snapshots', async () => {
   const { WorkingDraftSyncModal } = require('../modals/working-draft');
+  const github = require('../services/github-sync'), originalPush = github.pushSnapshot;
   for (const action of ['cancel', 'none', 'failure']) {
     const fx = bookFixture();
     await require('../commands/compile').compileWorkingDraft(fx.plugin);
@@ -156,6 +207,9 @@ test('cancel, zero selection and failed Working Draft transactions never produce
     await fx.vault.modify(file, fx.texts.get(draft).replace('Original A.', 'Changed A.'));
     const previousDraftSnapshot = fx.texts.get('Writing/compiled/cafe-story-book-1-working-draft.md');
     fx.plugin.app.workspace.getActiveFile = () => file;
+    fx.plugin.settings.github.autoPush = true;
+    const pushed = [];
+    github.pushSnapshot = async (_, path) => { pushed.push(path); };
     let modal;
     const old = WorkingDraftSyncModal.prototype.open;
     WorkingDraftSyncModal.prototype.open = function () { modal = this; };
@@ -165,9 +219,11 @@ test('cancel, zero selection and failed Working Draft transactions never produce
       if (action === 'none') await modal.onUpdate([]);
       if (action === 'failure') { fx.failNext(); await modal.onUpdate([modal.changes[0]]); }
       assert.ok(!fx.texts.has('Writing/compiled/cafe-story-book-1-manuscript.md'));
+      assert.ok(!fx.texts.has(dir + '/Compiled/Café Story.md'));
       assert.equal(fx.texts.get('Writing/compiled/cafe-story-book-1-working-draft.md'), previousDraftSnapshot);
       assert.match(fx.texts.get(dir + '/Manuscript/A.md'), /Original A/);
-    } finally { WorkingDraftSyncModal.prototype.open = old; }
+      assert.deepEqual(pushed, []);
+    } finally { WorkingDraftSyncModal.prototype.open = old; github.pushSnapshot = originalPush; }
   }
 });
 test('failed compile does not attempt snapshot export', async () => {
@@ -198,7 +254,7 @@ test('managed Book identity retains its snapshot filename after Book reordering'
   await fx.vault.modify(file, renderMaster(model));
   const again = await snapshots.writeSnapshot(fx.plugin, input({ dashboardPath: 'Writing/Café Story/Plot/Book 2/Dashboard.md', content: '# Updated\n\nNew saved prose.' }));
   assert.equal(again.path, first.path);
-  assert.equal([...fx.texts.keys()].filter(p => p.startsWith('Writing/compiled/')).length, 1);
+  assert.equal([...fx.texts.keys()].filter(p => /^Writing\/compiled\/[^/]+\.md$/.test(p)).length, 1);
 });
 test('non-string exports and headings with only a generated subtitle cannot erase prose', async () => {
   const fx = setup();
@@ -254,7 +310,12 @@ for (const outcome of ['success', 'manuscript-upload-failure', 'manuscript-local
       assert.match(manuscript.content, /Original B/);
       assert.doesNotMatch(manuscript.content, /Unselected B edit/);
     }
-    const allowed = new Set([dir + '/Manuscript/A.md', manuscriptSnapshot, workingSnapshot]);
+    const compiledPath = dir + '/Compiled/Café Story.md';
+    assert.match(fx.texts.get(compiledPath), /Selected A edit/);
+    assert.match(fx.texts.get(compiledPath), /Original B/);
+    assert.doesNotMatch(fx.texts.get(compiledPath), /Unselected B edit/);
+    if (outcome === 'manuscript-local-failure') assert.equal(fx.texts.get(manuscriptSnapshot), before.get(manuscriptSnapshot));
+    const allowed = new Set([dir + '/Manuscript/A.md', compiledPath, dir + '/Compiled/Chapters/Chapter 1.md', manuscriptSnapshot, workingSnapshot]);
     for (const [path, text] of before) if (!allowed.has(path)) assert.equal(fx.texts.get(path), text, 'Unrelated file preserved: ' + path);
     assert.equal(fx.texts.get(draft), edited);
   } finally {

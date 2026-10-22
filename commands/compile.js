@@ -13,8 +13,8 @@ async function compile(plugin, copyToClipboard) {
   }
 }
 
-async function compileBook(plugin, copyToClipboard) {
-  const d = await chooseDashboard(plugin);
+async function compileBook(plugin, copyToClipboard, dashboard) {
+  const d = dashboard || await chooseDashboard(plugin);
   if (!d) return;
 
   const I = bookInfo(d.path);
@@ -208,4 +208,4 @@ async function compileWorkingDraft(plugin) {
   }
 }
 
-module.exports = { compile, compileWorkingDraft };
+module.exports = { compile, compileBook, compileWorkingDraft };

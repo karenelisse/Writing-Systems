@@ -4,6 +4,15 @@ const { stripManuscript } = require('../lib/templates');
 const { githubSettings, saveSettings } = require('../settings/github');
 const DIRECTORY = 'Writing/compiled';
 const queues = new WeakMap();
+const ownershipPath = path => DIRECTORY + '/snapshot-owners/' + path.slice(DIRECTORY.length + 1);
+async function snapshotOwner(vault, path) {
+  const file = vault.getAbstractFileByPath(ownershipPath(path));
+  if (!file) return null;
+  if (!(file instanceof TFile)) throw Error('Snapshot ownership path is occupied.');
+  const { key } = JSON.parse(await vault.read(file));
+  if (typeof key !== 'string') throw Error('Snapshot ownership is invalid.');
+  return key;
+}
 function serial(plugin, work) {
   const previous = queues.get(plugin) || Promise.resolve();
   const next = previous.catch(() => {}).then(work);
@@ -59,23 +68,48 @@ async function writeSnapshot(plugin, { dashboardPath, type, content, sceneCount,
   let path = names[key];
   if (path) validatePath(path);
   const vault = plugin.app.vault;
+  const loaded = vault.getAllLoadedFiles();
+  // Synced sidecars recover stable identity, including numbered or renamed Books.
+  if (!path) {
+    for (const file of loaded.filter(f => f instanceof TFile && f.path.startsWith(DIRECTORY + '/snapshot-owners/'))) {
+      if (await snapshotOwner(vault, DIRECTORY + '/' + file.path.split('/').pop()) !== key) continue;
+      path = DIRECTORY + '/' + file.path.split('/').pop();
+      validatePath(path);
+      break;
+    }
+  }
   const occupant = path && vault.getAbstractFileByPath(path);
-  if (path && ((occupant && !(occupant instanceof TFile)) || Object.entries(names).some(([owner, other]) => owner !== key && other.toLowerCase() === path.toLowerCase()))) path = null;
+  if (path && ((occupant && !(occupant instanceof TFile)) || Object.entries(names).some(([owner, other]) => owner !== key && other.toLowerCase() === path.toLowerCase()) ||
+    (await snapshotOwner(vault, path) ?? key) !== key)) path = null;
   if (!path) {
     const base = snapshotName(info.projectName, info.bookName, type);
+    const canonical = DIRECTORY + '/' + base;
+    const existing = vault.getAbstractFileByPath(canonical);
+    // Legacy snapshots have no identity metadata. Require matching prose and a
+    // single matching Book Dashboard rather than trusting a lossy slug alone.
+    const candidates = loaded.filter(f => f instanceof TFile && /\/Plot\/Book \d+\/Dashboard\.md$/.test(f.path))
+      .filter(f => { const i = bookInfo(f.path); return snapshotName(i.projectName, i.bookName, type) === base; });
+    const reusable = existing instanceof TFile && !await snapshotOwner(vault, canonical) &&
+      !Object.values(names).some(p => p.toLowerCase() === canonical.toLowerCase()) &&
+      candidates.length === 1 && candidates[0].path === dashboardPath && await vault.read(existing) === clean;
     let name = base, suffix = 1;
     const occupied = candidate => Object.values(names).some(p => p.toLowerCase() === candidate.toLowerCase()) ||
+      vault.getAbstractFileByPath(ownershipPath(candidate)) ||
       vault.getAllLoadedFiles().some(f => f.path.normalize('NFC').toLowerCase() === candidate.normalize('NFC').toLowerCase());
-    while (occupied(DIRECTORY + '/' + name)) name = base.replace(/\.md$/, '-' + (++suffix) + '.md');
+    while (!reusable && occupied(DIRECTORY + '/' + name)) name = base.replace(/\.md$/, '-' + (++suffix) + '.md');
     path = DIRECTORY + '/' + name;
-    // Persist ownership before writing: a failed write can safely reuse this reservation.
-    names[key] = path;
-    try { await saveSettings(plugin); } catch (error) { delete names[key]; throw error; }
     if (suffix > 1) new Notice('Snapshot name already exists. Saving as ' + name + '.');
+  }
+  if (names[key] !== path) {
+    const previous = names[key];
+    names[key] = path;
+    try { await saveSettings(plugin); } catch (error) { if (previous) names[key] = previous; else delete names[key]; throw error; }
   }
   if (Object.entries(names).some(([owner, other]) => owner !== key && other.toLowerCase() === path.toLowerCase())) throw Error('Snapshot filename ownership is invalid.');
   const file = vault.getAbstractFileByPath(path);
   if (file && !(file instanceof TFile)) throw Error('A folder occupies the snapshot path.');
+  await require('./files').ensureFolder(plugin, DIRECTORY + '/snapshot-owners');
+  if (!vault.getAbstractFileByPath(ownershipPath(path))) await vault.create(ownershipPath(path), JSON.stringify({ key }) + '\n');
   if (file && await vault.read(file) === clean) return { path, changed: false };
   await require('./files').ensureFolder(plugin, DIRECTORY);
   if (file) await vault.modify(file, clean);
